@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"snow.mrmelon54.xyz/snowedin/structure"
-	"time"
 )
 
 func New(conf structure.ConfigYaml) *http.Server {
@@ -15,12 +14,10 @@ func New(conf structure.ConfigYaml) *http.Server {
 		_, _ = rw.Write([]byte("Hello World..."))
 	})
 	s := &http.Server{
-		Addr:              conf.Listen.Web,
-		Handler:           router,
-		ReadTimeout:       1 * time.Minute,
-		ReadHeaderTimeout: 1 * time.Minute,
-		WriteTimeout:      1 * time.Minute,
-		IdleTimeout:       1 * time.Minute,
+		Addr:         conf.Listen.Web,
+		Handler:      router,
+		ReadTimeout:  conf.Listen.GetReadTimeout(),
+		WriteTimeout: conf.Listen.GetWriteTimeout(),
 	}
 	go runBackgroundHttp(s)
 	return s

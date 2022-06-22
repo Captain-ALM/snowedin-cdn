@@ -5,6 +5,7 @@ import (
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path"
@@ -23,19 +24,27 @@ var (
 
 func main() {
 	log.Printf("[Main] Starting up Snowedin #%s (%s)\n", buildVersion, buildDate)
+	y := time.Now()
 
+	//Hold main thread till safe shutdown exit:
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
+
+	//Get working directory:
 
 	cwdDir, err := os.Getwd()
 	if err != nil {
 		log.Println(err)
 	}
 
+	//Load environment file:
+
 	err = godotenv.Load()
 	if err != nil {
 		log.Fatalln("Error loading .env file")
 	}
+
+	//Data directory processing:
 
 	dataDir := os.Getenv("DIR_DATA")
 	if dataDir == "" {
@@ -43,6 +52,8 @@ func main() {
 	}
 
 	check(os.MkdirAll(dataDir, 0777))
+
+	//Config loading:
 
 	configFile, err := os.Open(path.Join(dataDir, "config.yml"))
 	if err != nil {
@@ -56,13 +67,26 @@ func main() {
 		log.Fatalln("Failed to parse config.yml:", err)
 	}
 
+	//Server definitions:
+
+	log.Printf("[Main] Starting up HTTP server on %s...\n", configYml.Listen.Web)
 	webServer := web.New(configYml)
-	apiServer := api.New(configYml)
+
+	var apiServer *http.Server
+	if configYml.Listen.Api != "" {
+		log.Printf("[Main] Starting up API server on %s...\n", configYml.Listen.Api)
+		apiServer = api.New(configYml)
+	}
+	log.Printf("[Main] HTTP Timeouts: ( Read: %s Write: %s )", configYml.Listen.GetReadTimeout().String(), configYml.Listen.GetWriteTimeout().String())
 
 	//=====================
 	// Safe shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	//Startup complete:
+	z := time.Now().Sub(y)
+	log.Printf("[Main] Took '%s' to fully initialize modules\n", z.String())
 
 	go func() {
 		<-sigs
@@ -77,10 +101,12 @@ func main() {
 			log.Println(err)
 		}
 
-		log.Printf("[Main] Shutting down API server...\n")
-		err = apiServer.Close()
-		if err != nil {
-			log.Println(err)
+		if apiServer != nil {
+			log.Printf("[Main] Shutting down API server...\n")
+			err = apiServer.Close()
+			if err != nil {
+				log.Println(err)
+			}
 		}
 
 		log.Printf("[Main] Signalling program exit...\n")

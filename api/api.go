@@ -5,18 +5,15 @@ import (
 	"log"
 	"net/http"
 	"snow.mrmelon54.xyz/snowedin/structure"
-	"time"
 )
 
 func New(conf structure.ConfigYaml) *http.Server {
 	router := mux.NewRouter()
 	s := &http.Server{
-		Addr:              conf.Listen.Api,
-		Handler:           router,
-		ReadTimeout:       1 * time.Minute,
-		ReadHeaderTimeout: 1 * time.Minute,
-		WriteTimeout:      1 * time.Minute,
-		IdleTimeout:       1 * time.Minute,
+		Addr:         conf.Listen.Api,
+		Handler:      router,
+		ReadTimeout:  conf.Listen.GetReadTimeout(),
+		WriteTimeout: conf.Listen.GetWriteTimeout(),
 	}
 	go runBackgroundHttp(s)
 	return s
