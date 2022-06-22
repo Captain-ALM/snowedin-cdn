@@ -1,4 +1,4 @@
-module snowedin
+module snow.mrmelon54.xyz/snowedin
 
 go 1.18
 

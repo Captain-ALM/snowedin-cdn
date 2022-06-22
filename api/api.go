@@ -4,7 +4,7 @@ import (
 	"github.com/gorilla/mux"
 	"log"
 	"net/http"
-	"snowedin/structure"
+	"snow.mrmelon54.xyz/snowedin/structure"
 	"time"
 )
 

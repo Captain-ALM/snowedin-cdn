@@ -12,7 +12,6 @@ ifeq ($(OS),Windows_NT)
 	BIN := $(BIN).exe
 endif
 
-
 .PHONY: build dev test clean
 
 build:
