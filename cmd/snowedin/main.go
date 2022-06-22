@@ -1,4 +1,4 @@
-package snowedin
+package main
 
 import "log"
 
