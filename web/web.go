@@ -2,22 +2,24 @@ package web
 
 import (
 	"github.com/gorilla/mux"
+	"github.com/tomasen/realip"
 	"log"
 	"net/http"
-	"snow.mrmelon54.xyz/snowedin/structure"
+	"snow.mrmelon54.xyz/snowedin/cdn"
 )
 
-func New(conf structure.ConfigYaml) *http.Server {
+func New(cdn *cdn.CDN) *http.Server {
 	router := mux.NewRouter()
 	router.HandleFunc("/", func(rw http.ResponseWriter, req *http.Request) {
+		clientIP := realip.FromRequest(req)
 		rw.WriteHeader(http.StatusOK)
-		_, _ = rw.Write([]byte("Hello World..."))
+		_, _ = rw.Write([]byte(clientIP))
 	})
 	s := &http.Server{
-		Addr:         conf.Listen.Web,
+		Addr:         cdn.Config.Listen.Web,
 		Handler:      router,
-		ReadTimeout:  conf.Listen.GetReadTimeout(),
-		WriteTimeout: conf.Listen.GetWriteTimeout(),
+		ReadTimeout:  cdn.Config.Listen.GetReadTimeout(),
+		WriteTimeout: cdn.Config.Listen.GetWriteTimeout(),
 	}
 	go runBackgroundHttp(s)
 	return s

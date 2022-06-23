@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path"
 	"snow.mrmelon54.xyz/snowedin/api"
+	"snow.mrmelon54.xyz/snowedin/cdn"
 	"snow.mrmelon54.xyz/snowedin/structure"
 	"snow.mrmelon54.xyz/snowedin/web"
 	"sync"
@@ -69,15 +70,17 @@ func main() {
 
 	//Server definitions:
 
+	log.Printf("[Main] Starting up CDN server...")
+	cdnServer := cdn.New(configYml)
+
 	log.Printf("[Main] Starting up HTTP server on %s...\n", configYml.Listen.Web)
-	webServer := web.New(configYml)
+	webServer := web.New(cdnServer)
 
 	var apiServer *http.Server
 	if configYml.Listen.Api != "" {
+		apiServer = api.New(cdnServer)
 		log.Printf("[Main] Starting up API server on %s...\n", configYml.Listen.Api)
-		apiServer = api.New(configYml)
 	}
-	log.Printf("[Main] HTTP Timeouts: ( Read: %s Write: %s )", configYml.Listen.GetReadTimeout().String(), configYml.Listen.GetWriteTimeout().String())
 
 	//=====================
 	// Safe shutdown
