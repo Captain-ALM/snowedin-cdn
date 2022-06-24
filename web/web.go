@@ -2,27 +2,61 @@ package web
 
 import (
 	"github.com/gorilla/mux"
-	"github.com/tomasen/realip"
 	"log"
 	"net/http"
 	"snow.mrmelon54.xyz/snowedin/cdn"
+	"strings"
 )
 
-func New(cdn *cdn.CDN) *http.Server {
+func New(cdnIn *cdn.CDN) *http.Server {
 	router := mux.NewRouter()
-	router.HandleFunc("/", func(rw http.ResponseWriter, req *http.Request) {
-		clientIP := realip.FromRequest(req)
-		rw.WriteHeader(http.StatusOK)
-		_, _ = rw.Write([]byte(clientIP))
+	router.HandleFunc("/", zoneNotProvided)
+	router.HandleFunc("/{zone}", pathNotProvided)
+	router.HandleFunc("/{zone}/", pathNotProvided)
+	router.PathPrefix("/{zone}/").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		vars := mux.Vars(req)
+		var otherZone *cdn.Zone
+		var targetZone *cdn.Zone
+		for _, z := range cdnIn.Zones {
+			if z == nil {
+				continue
+			}
+			if z.Config.Name == "" && z.ZoneHostAllowed(req.Host) {
+				otherZone = z
+				continue
+			}
+			if strings.EqualFold(vars["zone"], z.Config.Name) && z.ZoneHostAllowed(req.Host) {
+				targetZone = z
+				break
+			}
+		}
+		if targetZone == nil && otherZone == nil {
+			rw.WriteHeader(http.StatusNotFound)
+			_, _ = rw.Write([]byte("Zone Not Found"))
+			return
+		} else if targetZone == nil && otherZone != nil {
+			targetZone = otherZone
+		}
+		targetZone.ZoneHandleRequest(rw, req)
 	})
 	s := &http.Server{
-		Addr:         cdn.Config.Listen.Web,
+		Addr:         cdnIn.Config.Listen.Web,
 		Handler:      router,
-		ReadTimeout:  cdn.Config.Listen.GetReadTimeout(),
-		WriteTimeout: cdn.Config.Listen.GetWriteTimeout(),
+		ReadTimeout:  cdnIn.Config.Listen.GetReadTimeout(),
+		WriteTimeout: cdnIn.Config.Listen.GetWriteTimeout(),
 	}
 	go runBackgroundHttp(s)
 	return s
+}
+
+func zoneNotProvided(rw http.ResponseWriter, req *http.Request) {
+	rw.WriteHeader(http.StatusNotFound)
+	_, _ = rw.Write([]byte("Zone Not Provided"))
+}
+
+func pathNotProvided(rw http.ResponseWriter, req *http.Request) {
+	rw.WriteHeader(http.StatusNotFound)
+	_, _ = rw.Write([]byte("Path Not Provided"))
 }
 
 func runBackgroundHttp(s *http.Server) {

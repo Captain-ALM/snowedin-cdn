@@ -1,9 +1,11 @@
 package backends
 
 import (
+	"io"
 	"os"
 	pth "path"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -25,22 +27,62 @@ func NewBackendFilesystem(confMap map[string]string) *BackendFilesystem {
 		}
 	}
 	return &BackendFilesystem{
-		directoryPath: directory,
-		fileStats:     fstats,
+		directoryPath:   directory,
+		fileModifyStats: fstats,
+		fileSizeStats:   make(map[string]int64),
+		filePointers:    make([]*os.File, 0),
 	}
 }
 
 type BackendFilesystem struct {
-	directoryPath string
-	fileStats     map[string]time.Time
+	directoryPath   string
+	fileModifyStats map[string]time.Time
+	fileSizeStats   map[string]int64
+	filePointers    []*os.File
+	syncer          sync.Mutex
 }
 
-func (b *BackendFilesystem) GetData(path string) []byte {
-	if file, err := os.ReadFile(pth.Join(b.directoryPath, path)); err == nil {
+func (b *BackendFilesystem) Size(path string) int64 {
+	if val, ok := b.fileSizeStats[path]; ok {
+		return val
+	}
+	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
+		b.fileSizeStats[path] = fstats.Size()
+		return b.fileSizeStats[path]
+	}
+	return 0
+}
+
+func (b *BackendFilesystem) OpenReader(path string) io.Reader {
+	b.syncer.Lock()
+	defer b.syncer.Unlock()
+	if file, err := os.Open(pth.Join(b.directoryPath, path)); err == nil {
+		b.filePointers = append(b.filePointers, file)
 		return file
 	} else {
 		return nil
 	}
+}
+
+func (b *BackendFilesystem) CloseReader(reader io.Reader) {
+	if reader == nil {
+		return
+	}
+	b.syncer.Lock()
+	defer b.syncer.Unlock()
+	targetIndex := -1
+	for i, p := range b.filePointers {
+		if p == reader {
+			targetIndex = i
+			_ = p.Close()
+			return
+		}
+	}
+	if targetIndex == -1 {
+		return
+	}
+	b.filePointers[targetIndex] = b.filePointers[len(b.filePointers)-1]
+	b.filePointers = b.filePointers[:len(b.filePointers)-1]
 }
 
 func (b *BackendFilesystem) Purge(path string) {
@@ -48,21 +90,26 @@ func (b *BackendFilesystem) Purge(path string) {
 }
 
 func (b *BackendFilesystem) Exists(path string) bool {
-	if _, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
-		return true
-	} else {
-		return false
+	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
+		if !fstats.IsDir() {
+			if file, err := os.Open(pth.Join(b.directoryPath, path)); err == nil {
+				_ = file.Close()
+				return true
+			}
+		}
 	}
+	return false
 }
 
 func (b *BackendFilesystem) Updated(path string) bool {
-	if b.fileStats == nil {
+	if b.fileModifyStats == nil {
 		return true
 	}
 	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
-		oldMTime := b.fileStats[path]
+		oldMTime := b.fileModifyStats[path]
+		delete(b.fileSizeStats, path)
 		defer func() {
-			b.fileStats[path] = fstats.ModTime()
+			b.fileModifyStats[path] = fstats.ModTime()
 		}()
 		return !fstats.ModTime().Equal(oldMTime)
 	} else {
