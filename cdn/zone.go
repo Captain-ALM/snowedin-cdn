@@ -102,32 +102,31 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											setLastModifiedHeader(rw.Header(), fsMod)
 											fsSize = int64(lengthOfStringSlice(list))
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											logHeaders(rw.Header())
-											rw.WriteHeader(http.StatusOK)
-											logPrintln(2, "200 OK")
-											logPrintln(4, "Send Start")
-											var theWriter io.Writer
-											if bwlim.YamlValid() {
-												theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-											} else {
-												theWriter = rw
-											}
-											for i, cs := range list {
-												_, err = theWriter.Write([]byte(cs))
-												if err != nil {
-													logPrintln(1, "Internal Error: "+err.Error())
-													break
+											if processIfModSince(rw, req, fsMod) {
+												logPrintln(4, "Send Start")
+												var theWriter io.Writer
+												if bwlim.YamlValid() {
+													theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+												} else {
+													theWriter = rw
 												}
-												if i < len(list)-1 {
-													_, err = theWriter.Write([]byte("\r\n"))
+												for i, cs := range list {
+													_, err = theWriter.Write([]byte(cs))
 													if err != nil {
 														logPrintln(1, "Internal Error: "+err.Error())
 														break
 													}
+													if i < len(list)-1 {
+														_, err = theWriter.Write([]byte("\r\n"))
+														if err != nil {
+															logPrintln(1, "Internal Error: "+err.Error())
+															break
+														}
+													}
 												}
-											}
-											if err == nil {
-												logPrintln(4, "Send Complete")
+												if err == nil {
+													logPrintln(4, "Send Complete")
+												}
 											}
 										} else {
 											setNeverCacheHeader(rw.Header())
@@ -151,26 +150,23 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												if theMimeType != "" {
 													rw.Header().Set("Content-Type", theMimeType)
 												}
-												logHeaders(rw.Header())
-												rw.WriteHeader(http.StatusOK)
-												logPrintln(2, "200 OK")
-												logPrintln(4, "Send Start")
-												var theWriter io.Writer
-												if bwlim.YamlValid() {
-													theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-												} else {
-													theWriter = rw
-												}
-												err = zone.Backend.WriteData(lookupPath, theWriter)
-												if err != nil {
-													logPrintln(1, "Internal Error: "+err.Error())
-												} else {
-													logPrintln(4, "Send Complete")
+												if processIfModSince(rw, req, fsMod) {
+													logPrintln(4, "Send Start")
+													var theWriter io.Writer
+													if bwlim.YamlValid() {
+														theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+													} else {
+														theWriter = rw
+													}
+													err = zone.Backend.WriteData(lookupPath, theWriter)
+													if err != nil {
+														logPrintln(1, "Internal Error: "+err.Error())
+													} else {
+														logPrintln(4, "Send Complete")
+													}
 												}
 											} else {
-												logHeaders(rw.Header())
-												rw.WriteHeader(http.StatusOK)
-												logPrintln(2, "200 OK")
+												processIfModSince(rw, req, fsMod)
 											}
 										} else {
 											logHeaders(rw.Header())
@@ -236,6 +232,47 @@ func (zone *Zone) ZoneHostAllowed(host string) bool {
 		}
 		return false
 	}
+}
+
+func processIfModSince(rw http.ResponseWriter, req *http.Request, modT time.Time) bool {
+	if !modT.IsZero() && req.Header.Get("If-Modified-Since") != "" {
+		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Modified-Since"))
+		if err == nil {
+			if modT.Before(parse) || strings.EqualFold(modT.Format(http.TimeFormat), req.Header.Get("If-Modified-Since")) {
+				logHeaders(rw.Header())
+				rw.WriteHeader(http.StatusNotModified)
+				logPrintln(2, "304 Not Modified")
+				logPrintln(4, "Send Skipped")
+				return false
+			}
+		}
+	}
+	if !modT.IsZero() && req.Header.Get("If-Unmodified-Since") != "" {
+		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Unmodified-Since"))
+		if err == nil {
+			if modT.After(parse) {
+				setNeverCacheHeader(rw.Header())
+				if rw.Header().Get("Last-Modified") != "" {
+					rw.Header().Del("Last-Modified")
+				}
+				if rw.Header().Get("Age") != "" {
+					rw.Header().Del("Age")
+				}
+				if rw.Header().Get("Expires") != "" {
+					rw.Header().Del("Expires")
+				}
+				logHeaders(rw.Header())
+				rw.WriteHeader(http.StatusPreconditionFailed)
+				logPrintln(2, "412 Precondition Failed")
+				logPrintln(4, "Send Condition Not Satisfied")
+				return false
+			}
+		}
+	}
+	logHeaders(rw.Header())
+	rw.WriteHeader(http.StatusOK)
+	logPrintln(2, "200 OK")
+	return true
 }
 
 func setNeverCacheHeader(header http.Header) {
@@ -430,7 +467,7 @@ func logPrintln(minLevel uint, toLog string) {
 func logHeaders(headers http.Header) {
 	if LogLevel >= 3 {
 		for k := range headers {
-			log.Println("[Http] [Zone] " + k + ": " + headers.Get(k))
+			log.Println("[Http] [Zone] [Header] " + k + ": " + headers.Get(k))
 		}
 	}
 }
