@@ -47,26 +47,32 @@ func NewBackendFilesystem(confMap map[string]string) *BackendFilesystem {
 	if confMap["listDirectories"] != "" {
 		dirl, _ = strconv.ParseBool(confMap["listDirectories"])
 	}
+	var dmtc = false
+	if confMap["directoryModifiedTimeCheck"] != "" {
+		dmtc, _ = strconv.ParseBool(confMap["directoryModifiedTimeCheck"])
+	}
 	return &BackendFilesystem{
-		directoryPath:       directory,
-		cachedHeaderBytes:   chb,
-		existsCheckFileOpen: ecfo,
-		watchModified:       wmod,
-		mimeTypeByExtension: mtbe,
-		directoryListing:    dirl,
-		fileObjects:         make(map[string]*FileObject),
+		directoryPath:              directory,
+		cachedHeaderBytes:          chb,
+		existsCheckFileOpen:        ecfo,
+		watchModified:              wmod,
+		mimeTypeByExtension:        mtbe,
+		directoryListing:           dirl,
+		directoryModifiedTimeCheck: dmtc,
+		fileObjects:                make(map[string]*FileObject),
 	}
 }
 
 type BackendFilesystem struct {
-	directoryPath       string
-	cachedHeaderBytes   uint
-	existsCheckFileOpen bool
-	watchModified       bool
-	mimeTypeByExtension bool
-	directoryListing    bool
-	fileObjects         map[string]*FileObject
-	syncer              sync.Mutex
+	directoryPath              string
+	cachedHeaderBytes          uint
+	existsCheckFileOpen        bool
+	watchModified              bool
+	mimeTypeByExtension        bool
+	directoryListing           bool
+	directoryModifiedTimeCheck bool
+	fileObjects                map[string]*FileObject
+	syncer                     sync.Mutex
 }
 
 func (b *BackendFilesystem) MimeType(path string) (mimetype string) {
@@ -112,7 +118,7 @@ func (b *BackendFilesystem) Stats(path string) (size int64, modified time.Time, 
 	if fobj == nil {
 		return 0, time.Time{}, err
 	} else {
-		return fobj.size, fobj.modifyTime, nil
+		return fobj.size, fobj.modifyTime.UTC(), nil
 	}
 }
 
@@ -131,6 +137,9 @@ func (b *BackendFilesystem) getFileObject(path string) (*FileObject, error) {
 		sz, tm, err := b.directStats(path)
 		if err == nil {
 			if sz < 0 {
+				if !b.directoryModifiedTimeCheck {
+					tm = time.Time{}
+				}
 				return &FileObject{
 					cache:           nil,
 					cacheWriteIndex: 0,
@@ -190,7 +199,7 @@ func (b *BackendFilesystem) List(path string) (entries []string, err error) {
 	if dir, err := os.ReadDir(pth.Join(b.directoryPath, path)); err == nil {
 		contents := make([]string, len(dir))
 		for i, d := range dir {
-			contents[i] = pth.Join(path, d.Name())
+			contents[i] = d.Name()
 		}
 		return contents, nil
 	} else {
