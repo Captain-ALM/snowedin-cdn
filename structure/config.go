@@ -6,8 +6,9 @@ import (
 )
 
 type ConfigYaml struct {
-	Listen ListenYaml `yaml:"listen"`
-	Zones  []ZoneYaml `yaml:"zones"`
+	LogLevel uint       `yaml:"logLevel"`
+	Listen   ListenYaml `yaml:"listen"`
+	Zones    []ZoneYaml `yaml:"zones"`
 }
 
 type ListenYaml struct {

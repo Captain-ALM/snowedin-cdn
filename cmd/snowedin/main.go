@@ -70,7 +70,7 @@ func main() {
 
 	//Server definitions:
 
-	log.Printf("[Main] Starting up CDN server...")
+	log.Println("[Main] Starting up CDN server...")
 	cdnServer := cdn.New(configYml)
 
 	log.Printf("[Main] Starting up HTTP server on %s...\n", configYml.Listen.Web)

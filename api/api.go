@@ -7,14 +7,20 @@ import (
 	"snow.mrmelon54.xyz/snowedin/cdn"
 )
 
-func New(cdn *cdn.CDN) *http.Server {
+//var LogLevel uint = 0
+
+func New(cdnIn *cdn.CDN) *http.Server {
 	router := mux.NewRouter()
-	s := &http.Server{
-		Addr:         cdn.Config.Listen.Api,
-		Handler:      router,
-		ReadTimeout:  cdn.Config.Listen.GetReadTimeout(),
-		WriteTimeout: cdn.Config.Listen.GetWriteTimeout(),
+	if cdnIn.Config.Listen.Api == "" {
+		log.Fatalf("[Http] Invalid Listening Address")
 	}
+	s := &http.Server{
+		Addr:         cdnIn.Config.Listen.Api,
+		Handler:      router,
+		ReadTimeout:  cdnIn.Config.Listen.GetReadTimeout(),
+		WriteTimeout: cdnIn.Config.Listen.GetWriteTimeout(),
+	}
+	//LogLevel = cdnIn.Config.LogLevel
 	go runBackgroundHttp(s)
 	return s
 }
@@ -25,7 +31,7 @@ func runBackgroundHttp(s *http.Server) {
 		if err == http.ErrServerClosed {
 			log.Println("[Http] The http server shutdown successfully")
 		} else {
-			log.Printf("[Http] Error trying to host the http server: %s\n", err.Error())
+			log.Fatalf("[Http] Error trying to host the http server: %s\n", err.Error())
 		}
 	}
 }

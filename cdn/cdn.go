@@ -8,7 +8,7 @@ func New(config structure.ConfigYaml) *CDN {
 	toReturn := &CDN{Config: config}
 	toReturn.Zones = make([]*Zone, len(toReturn.Config.Zones))
 	for i, z := range toReturn.Config.Zones {
-		toReturn.Zones[i] = NewZone(z)
+		toReturn.Zones[i] = NewZone(z, config.LogLevel)
 	}
 	return toReturn
 }
