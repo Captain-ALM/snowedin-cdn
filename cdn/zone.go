@@ -94,13 +94,19 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											fsSize = int64(lengthOfStringSlice(list))
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
 											rw.WriteHeader(http.StatusOK)
+											var theWriter io.Writer
+											if bwlim.YamlValid() {
+												theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+											} else {
+												theWriter = rw
+											}
 											for i, cs := range list {
-												_, err = rw.Write([]byte(cs))
+												_, err = theWriter.Write([]byte(cs))
 												if err != nil {
 													break
 												}
 												if i < len(list)-1 {
-													_, err = rw.Write([]byte("\r\n"))
+													_, err = theWriter.Write([]byte("\r\n"))
 													if err != nil {
 														break
 													}
