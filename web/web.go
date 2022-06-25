@@ -14,30 +14,39 @@ func New(cdnIn *cdn.CDN) *http.Server {
 	router.HandleFunc("/{zone}", pathNotProvided)
 	router.HandleFunc("/{zone}/", pathNotProvided)
 	router.PathPrefix("/{zone}/").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		vars := mux.Vars(req)
-		var otherZone *cdn.Zone
-		var targetZone *cdn.Zone
-		for _, z := range cdnIn.Zones {
-			if z == nil {
-				continue
+		if req.Method == http.MethodGet || req.Method == http.MethodDelete {
+			vars := mux.Vars(req)
+			var otherZone *cdn.Zone
+			var targetZone *cdn.Zone
+			for _, z := range cdnIn.Zones {
+				if z == nil {
+					continue
+				}
+				if z.Config.Name == "" && z.ZoneHostAllowed(req.Host) {
+					otherZone = z
+					continue
+				}
+				if strings.EqualFold(vars["zone"], z.Config.Name) && z.ZoneHostAllowed(req.Host) {
+					targetZone = z
+					break
+				}
 			}
-			if z.Config.Name == "" && z.ZoneHostAllowed(req.Host) {
-				otherZone = z
-				continue
+			if targetZone == nil && otherZone == nil {
+				rw.Header().Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
+				http.Error(rw, "Zone Not Found", http.StatusNotFound)
+				return
+			} else if targetZone == nil && otherZone != nil {
+				targetZone = otherZone
 			}
-			if strings.EqualFold(vars["zone"], z.Config.Name) && z.ZoneHostAllowed(req.Host) {
-				targetZone = z
-				break
+			targetZone.ZoneHandleRequest(rw, req)
+		} else {
+			rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodDelete)
+			if req.Method == http.MethodOptions {
+				rw.WriteHeader(http.StatusOK)
+			} else {
+				rw.WriteHeader(http.StatusMethodNotAllowed)
 			}
 		}
-		if targetZone == nil && otherZone == nil {
-			rw.Header().Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
-			http.Error(rw, "Zone Not Found", http.StatusNotFound)
-			return
-		} else if targetZone == nil && otherZone != nil {
-			targetZone = otherZone
-		}
-		targetZone.ZoneHandleRequest(rw, req)
 	})
 	s := &http.Server{
 		Addr:         cdnIn.Config.Listen.Web,
@@ -50,13 +59,29 @@ func New(cdnIn *cdn.CDN) *http.Server {
 }
 
 func zoneNotProvided(rw http.ResponseWriter, req *http.Request) {
-	rw.WriteHeader(http.StatusNotFound)
-	_, _ = rw.Write([]byte("Zone Not Provided"))
+	if req.Method == http.MethodGet {
+		http.Error(rw, "Zone Not Provided", http.StatusNotFound)
+	} else {
+		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet)
+		if req.Method == http.MethodOptions {
+			rw.WriteHeader(http.StatusOK)
+		} else {
+			rw.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}
 }
 
 func pathNotProvided(rw http.ResponseWriter, req *http.Request) {
-	rw.WriteHeader(http.StatusNotFound)
-	_, _ = rw.Write([]byte("Path Not Provided"))
+	if req.Method == http.MethodGet {
+		http.Error(rw, "Path Not Provided", http.StatusNotFound)
+	} else {
+		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet)
+		if req.Method == http.MethodOptions {
+			rw.WriteHeader(http.StatusOK)
+		} else {
+			rw.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}
 }
 
 func runBackgroundHttp(s *http.Server) {

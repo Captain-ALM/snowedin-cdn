@@ -66,84 +66,101 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 			pexists, plistable := zone.Backend.Exists(lookupPath)
 
 			if pexists {
+
 				if zone.AccessLimits[lookupPath] == nil {
 					zone.AccessLimits[lookupPath] = NewAccessLimit(zone.Config.AccessLimit)
 				}
-				if zone.AccessLimits[lookupPath].Gone {
-					setNeverCacheHeader(rw.Header())
-					http.Error(rw, "Object Gone", http.StatusGone)
-				} else {
-					if zone.AccessLimits[lookupPath].accessLimitReached() {
+
+				if req.Method == http.MethodGet {
+
+					if zone.AccessLimits[lookupPath].Gone {
 						setNeverCacheHeader(rw.Header())
-						http.Error(rw, "Access Limit Reached", http.StatusForbidden)
+						http.Error(rw, "Object Gone", http.StatusGone)
 					} else {
-						if zone.AccessLimits[lookupPath].isExpired() {
+						if zone.AccessLimits[lookupPath].accessLimitReached() {
 							setNeverCacheHeader(rw.Header())
-							http.Error(rw, "Object Expired", http.StatusGone)
+							http.Error(rw, "Access Limit Reached", http.StatusForbidden)
 						} else {
-							fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
-							if err == nil {
-								if plistable {
-									list, err := zone.Backend.List(lookupPath)
-									if err == nil {
-										setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
-										fsSize = int64(lengthOfStringSlice(list))
-										rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-										rw.WriteHeader(http.StatusOK)
-										for i, cs := range list {
-											_, err = rw.Write([]byte(cs))
-											if err != nil {
-												break
-											}
-											if i < len(list)-1 {
-												_, err = rw.Write([]byte("\r\n"))
+							if zone.AccessLimits[lookupPath].isExpired() {
+								setNeverCacheHeader(rw.Header())
+								http.Error(rw, "Object Expired", http.StatusGone)
+							} else {
+								fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
+								if err == nil {
+									if plistable {
+										list, err := zone.Backend.List(lookupPath)
+										if err == nil {
+											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+											fsSize = int64(lengthOfStringSlice(list))
+											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+											rw.WriteHeader(http.StatusOK)
+											for i, cs := range list {
+												_, err = rw.Write([]byte(cs))
 												if err != nil {
 													break
 												}
+												if i < len(list)-1 {
+													_, err = rw.Write([]byte("\r\n"))
+													if err != nil {
+														break
+													}
+												}
 											}
+										} else {
+											setNeverCacheHeader(rw.Header())
+											http.Error(rw, "Object Expired", http.StatusGone)
 										}
 									} else {
-										setNeverCacheHeader(rw.Header())
-										http.Error(rw, "Object Expired", http.StatusGone)
+										if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
+											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+										} else {
+											setExpiresHeader(rw.Header(), zone.AccessLimits[lookupPath].ExpireTime)
+											if zone.Config.PrivateCache {
+												rw.Header().Set("Cache-Control", "private")
+											}
+										}
+										if fsSize >= 0 {
+											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+											if fsSize > 0 {
+												theMimeType := zone.Backend.MimeType(lookupPath)
+												if theMimeType != "" {
+													rw.Header().Set("Content-Type", theMimeType)
+												}
+												rw.WriteHeader(http.StatusOK)
+												var theWriter io.Writer
+												if bwlim.YamlValid() {
+													theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+												} else {
+													theWriter = rw
+												}
+												_ = zone.Backend.WriteData(lookupPath, theWriter)
+											} else {
+												rw.WriteHeader(http.StatusOK)
+											}
+										} else {
+											rw.WriteHeader(http.StatusForbidden)
+										}
 									}
 								} else {
-									if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
-										setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
-									} else {
-										setExpiresHeader(rw.Header(), zone.AccessLimits[lookupPath].ExpireTime)
-										if zone.Config.PrivateCache {
-											rw.Header().Set("Cache-Control", "private")
-										}
-									}
-									if fsSize >= 0 {
-										rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-										if fsSize > 0 {
-											theMimeType := zone.Backend.MimeType(lookupPath)
-											if theMimeType != "" {
-												rw.Header().Set("Content-Type", theMimeType)
-											}
-											rw.WriteHeader(http.StatusOK)
-											var theWriter io.Writer
-											if bwlim.YamlValid() {
-												theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-											} else {
-												theWriter = rw
-											}
-											_ = zone.Backend.WriteData(lookupPath, theWriter)
-										} else {
-											rw.WriteHeader(http.StatusOK)
-										}
-									} else {
-										rw.WriteHeader(http.StatusForbidden)
-									}
+									setNeverCacheHeader(rw.Header())
+									http.Error(rw, "Stat Failure: "+err.Error(), http.StatusInternalServerError)
 								}
-							} else {
-								setNeverCacheHeader(rw.Header())
-								http.Error(rw, "Stat Failure: "+err.Error(), http.StatusInternalServerError)
 							}
 						}
 					}
+
+				} else if req.Method == http.MethodDelete {
+					err := zone.Backend.Purge(lookupPath)
+					setNeverCacheHeader(rw.Header())
+					if err == nil {
+						rw.WriteHeader(http.StatusOK)
+					} else {
+						http.Error(rw, "Purge Error: "+err.Error(), http.StatusInternalServerError)
+					}
+				} else {
+					http.Error(rw, "Forbidden Method", http.StatusForbidden)
 				}
+
 			} else {
 				if zone.AccessLimits[lookupPath] != nil {
 					zone.AccessLimits[lookupPath] = nil
