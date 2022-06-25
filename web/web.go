@@ -127,6 +127,15 @@ func logRequest(req *http.Request) {
 		logPrintln(2, "Host: "+req.Host)
 		logPrintln(2, "Client Address: "+realip.FromRequest(req))
 	}
+	logHeaders(req.Header)
+}
+
+func logHeaders(headers http.Header) {
+	if LogLevel >= 3 {
+		for k := range headers {
+			log.Println("[Http] " + k + ": " + headers.Get(k))
+		}
+	}
 }
 
 func logPrintln(minLevel uint, toLog string) {

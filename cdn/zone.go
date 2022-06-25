@@ -99,6 +99,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 										list, err := zone.Backend.List(lookupPath)
 										if err == nil {
 											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+											setLastModifiedHeader(rw.Header(), fsMod)
 											fsSize = int64(lengthOfStringSlice(list))
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
 											logHeaders(rw.Header())
@@ -134,6 +135,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											logPrintln(2, "403 Forbidden")
 										}
 									} else {
+										setLastModifiedHeader(rw.Header(), fsMod)
 										if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
 											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
 										} else {
@@ -244,13 +246,17 @@ func setExpiresHeader(header http.Header, expireTime time.Time) {
 	header.Set("Expires", expireTime.UTC().Format(http.TimeFormat))
 }
 
+func setLastModifiedHeader(header http.Header, modTime time.Time) {
+	header.Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
+}
+
 func setCacheHeaderWithAge(header http.Header, maxAge uint, modifiedTime time.Time, isPrivate bool) {
 	header.Set("Cache-Control", "max-age="+strconv.Itoa(int(maxAge))+", must-revalidate")
 	if isPrivate {
 		header.Set("Cache-Control", header.Get("Cache-Control")+", private")
 	}
 	if maxAge > 0 {
-		checkerSecondsBetween := time.Now().UTC().Second() - modifiedTime.UTC().Second()
+		checkerSecondsBetween := int64(time.Now().UTC().Sub(modifiedTime.UTC()).Seconds())
 		if checkerSecondsBetween < 0 {
 			checkerSecondsBetween *= -1
 		}
