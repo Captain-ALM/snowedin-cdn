@@ -350,24 +350,21 @@ func (lbw *LimitedBandwidthWriter) Write(p []byte) (n int, err error) {
 	var currentArrayIndex uint = 0
 	for currentArrayIndex < uint(len(p)) {
 		if currentArrayIndex+(lbw.limiterSettings.Bytes-lbw.passedWriterIndex) < uint(len(p)) {
-			writtenIn := make([]byte, lbw.limiterSettings.Bytes-lbw.passedWriterIndex)
-			written, err := lbw.passedWriter.Write(writtenIn)
+			written, err := lbw.passedWriter.Write(p[currentArrayIndex : currentArrayIndex+(lbw.limiterSettings.Bytes-lbw.passedWriterIndex)])
+			currentArrayIndex += uint(written)
+			lbw.passedWriterIndex += uint(written)
 			if err != nil {
 				return int(currentArrayIndex), err
 			}
-			copy(p[currentArrayIndex:], writtenIn[0:written])
-			currentArrayIndex += uint(written)
-			lbw.passedWriterIndex += uint(written)
 		} else {
-			writtenIn := make([]byte, uint(len(p))-currentArrayIndex)
-			written, err := lbw.passedWriter.Write(writtenIn)
+			written, err := lbw.passedWriter.Write(p[currentArrayIndex:])
+			currentArrayIndex += uint(written)
+			lbw.passedWriterIndex += uint(written)
 			if err != nil {
 				return int(currentArrayIndex), err
 			}
-			copy(p[currentArrayIndex:], writtenIn[0:written])
-			currentArrayIndex += uint(written)
-			lbw.passedWriterIndex += uint(written)
 		}
+
 		if lbw.passedWriterIndex >= lbw.limiterSettings.Bytes {
 			lbw.passedWriterIndex = lbw.passedWriterIndex - lbw.limiterSettings.Bytes
 			time.Sleep(lbw.limiterSettings.Interval)
