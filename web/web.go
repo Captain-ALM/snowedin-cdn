@@ -12,41 +12,11 @@ func New(cdnIn *cdn.CDN) *http.Server {
 	router := mux.NewRouter()
 	router.HandleFunc("/", zoneNotProvided)
 	router.HandleFunc("/{zone}", pathNotProvided)
-	router.HandleFunc("/{zone}/", pathNotProvided)
+	router.HandleFunc("/{zone}/", func(rw http.ResponseWriter, req *http.Request) {
+		zoneHandlerFunc(rw, req, cdnIn)
+	})
 	router.PathPrefix("/{zone}/").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodGet || req.Method == http.MethodDelete {
-			vars := mux.Vars(req)
-			var otherZone *cdn.Zone
-			var targetZone *cdn.Zone
-			for _, z := range cdnIn.Zones {
-				if z == nil {
-					continue
-				}
-				if z.Config.Name == "" && z.ZoneHostAllowed(req.Host) {
-					otherZone = z
-					continue
-				}
-				if strings.EqualFold(vars["zone"], z.Config.Name) && z.ZoneHostAllowed(req.Host) {
-					targetZone = z
-					break
-				}
-			}
-			if targetZone == nil && otherZone == nil {
-				rw.Header().Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
-				http.Error(rw, "Zone Not Found", http.StatusNotFound)
-				return
-			} else if targetZone == nil && otherZone != nil {
-				targetZone = otherZone
-			}
-			targetZone.ZoneHandleRequest(rw, req)
-		} else {
-			rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodDelete)
-			if req.Method == http.MethodOptions {
-				rw.WriteHeader(http.StatusOK)
-			} else {
-				rw.WriteHeader(http.StatusMethodNotAllowed)
-			}
-		}
+		zoneHandlerFunc(rw, req, cdnIn)
 	})
 	s := &http.Server{
 		Addr:         cdnIn.Config.Listen.Web,
@@ -63,6 +33,42 @@ func zoneNotProvided(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "Zone Not Provided", http.StatusNotFound)
 	} else {
 		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet)
+		if req.Method == http.MethodOptions {
+			rw.WriteHeader(http.StatusOK)
+		} else {
+			rw.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func zoneHandlerFunc(rw http.ResponseWriter, req *http.Request, cdnIn *cdn.CDN) {
+	if req.Method == http.MethodGet || req.Method == http.MethodDelete {
+		vars := mux.Vars(req)
+		var otherZone *cdn.Zone
+		var targetZone *cdn.Zone
+		for _, z := range cdnIn.Zones {
+			if z == nil {
+				continue
+			}
+			if z.Config.Name == "" && z.ZoneHostAllowed(req.Host) {
+				otherZone = z
+				continue
+			}
+			if strings.EqualFold(vars["zone"], z.Config.Name) && z.ZoneHostAllowed(req.Host) {
+				targetZone = z
+				break
+			}
+		}
+		if targetZone == nil && otherZone == nil {
+			rw.Header().Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
+			http.Error(rw, "Zone Not Found", http.StatusNotFound)
+			return
+		} else if targetZone == nil && otherZone != nil {
+			targetZone = otherZone
+		}
+		targetZone.ZoneHandleRequest(rw, req)
+	} else {
+		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodDelete)
 		if req.Method == http.MethodOptions {
 			rw.WriteHeader(http.StatusOK)
 		} else {
