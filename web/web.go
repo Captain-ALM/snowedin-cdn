@@ -133,7 +133,7 @@ func logRequest(req *http.Request) {
 func logHeaders(headers http.Header) {
 	if LogLevel >= 3 {
 		for k := range headers {
-			log.Println("[Http] " + k + ": " + headers.Get(k))
+			log.Println("[Http] [Header] " + k + ": " + headers.Get(k))
 		}
 	}
 }
