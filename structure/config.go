@@ -142,7 +142,7 @@ type LimitRequestsYaml struct {
 }
 
 func (lry LimitRequestsYaml) YamlValid() bool {
-	return lry.MaxRequests != 0 && lry.RequestRateInterval.Seconds() >= 1
+	return lry.MaxRequests != 0 && lry.RequestRateInterval.Milliseconds() >= 20
 }
 
 func (lry LimitRequestsYaml) AddressContained(address string) bool {
@@ -161,7 +161,7 @@ type BandwidthLimitYaml struct {
 }
 
 func (bly BandwidthLimitYaml) YamlValid() bool {
-	return bly.Bytes != 0 && bly.Interval.Seconds() >= 1
+	return bly.Bytes != 0 && bly.Interval.Milliseconds() >= 20
 }
 
 func (bly BandwidthLimitYaml) AddressContained(address string) bool {
