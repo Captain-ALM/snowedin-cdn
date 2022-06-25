@@ -31,8 +31,8 @@ func New(cdnIn *cdn.CDN) *http.Server {
 			}
 		}
 		if targetZone == nil && otherZone == nil {
-			rw.WriteHeader(http.StatusNotFound)
-			_, _ = rw.Write([]byte("Zone Not Found"))
+			rw.Header().Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
+			http.Error(rw, "Zone Not Found", http.StatusNotFound)
 			return
 		} else if targetZone == nil && otherZone != nil {
 			targetZone = otherZone

@@ -36,6 +36,8 @@ func (ly ListenYaml) GetWriteTimeout() time.Duration {
 type ZoneYaml struct {
 	Name            string            `yaml:"name"`
 	Domains         []string          `yaml:"domains"`
+	MaxAge          uint              `yaml:"maxAge"`
+	PrivateCache    bool              `yaml:"privateCache"`
 	AccessLimit     AccessLimitYaml   `yaml:"accessLimit"`
 	Limits          LimitsYaml        `yaml:"limits"`
 	Backend         string            `yaml:"backend"`
@@ -61,7 +63,7 @@ func (ly LimitsYaml) GetLimitConnectionYaml(address string) LimitConnectionYaml 
 		if len(lcyc.RemoteAddresses) == 0 {
 			other = &lcyc
 		}
-		if lcyc.LimitConnectionYamlAddressContained(address) {
+		if lcyc.AddressContained(address) {
 			lcy = &lcyc
 			break
 		}
@@ -81,7 +83,7 @@ func (ly LimitsYaml) GetLimitRequestsYaml(address string) LimitRequestsYaml {
 		if len(lryc.RemoteAddresses) == 0 {
 			other = &lryc
 		}
-		if lryc.LimitRequestsYamlAddressContained(address) {
+		if lryc.AddressContained(address) {
 			lry = &lryc
 			break
 		}
@@ -101,7 +103,7 @@ func (ly LimitsYaml) GetBandwidthLimitYaml(address string) BandwidthLimitYaml {
 		if len(blyc.RemoteAddresses) == 0 {
 			other = &blyc
 		}
-		if blyc.BandwidthLimitYamlAddressContained(address) {
+		if blyc.AddressContained(address) {
 			bly = &blyc
 			break
 		}
@@ -119,11 +121,11 @@ type LimitConnectionYaml struct {
 	RemoteAddresses []string `yaml:"remoteAddresses"`
 }
 
-func (lcy LimitConnectionYaml) LimitConnectionYamlValid() bool {
+func (lcy LimitConnectionYaml) YamlValid() bool {
 	return lcy.MaxConnections != 0
 }
 
-func (lcy LimitConnectionYaml) LimitConnectionYamlAddressContained(address string) bool {
+func (lcy LimitConnectionYaml) AddressContained(address string) bool {
 	for _, s := range lcy.RemoteAddresses {
 		if strings.EqualFold(s, address) {
 			return true
@@ -138,11 +140,11 @@ type LimitRequestsYaml struct {
 	RemoteAddresses     []string      `yaml:"remoteAddresses"`
 }
 
-func (lry LimitRequestsYaml) LimitRequestsYamlValid() bool {
+func (lry LimitRequestsYaml) YamlValid() bool {
 	return lry.MaxRequests != 0 && lry.RequestRateInterval.Seconds() >= 1
 }
 
-func (lry LimitRequestsYaml) LimitRequestsYamlAddressContained(address string) bool {
+func (lry LimitRequestsYaml) AddressContained(address string) bool {
 	for _, s := range lry.RemoteAddresses {
 		if strings.EqualFold(s, address) {
 			return true
@@ -157,11 +159,11 @@ type BandwidthLimitYaml struct {
 	RemoteAddresses []string      `yaml:"remoteAddresses"`
 }
 
-func (bly BandwidthLimitYaml) BandwidthLimitYamlValid() bool {
+func (bly BandwidthLimitYaml) YamlValid() bool {
 	return bly.Bytes != 0 && bly.Interval.Seconds() >= 1
 }
 
-func (bly BandwidthLimitYaml) BandwidthLimitYamlAddressContained(address string) bool {
+func (bly BandwidthLimitYaml) AddressContained(address string) bool {
 	for _, s := range bly.RemoteAddresses {
 		if strings.EqualFold(s, address) {
 			return true

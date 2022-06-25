@@ -53,9 +53,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 	bwlim := zone.Config.Limits.GetBandwidthLimitYaml(clientIP)
 
-	if !zone.ConnectionLimits[clientIP].limitConf.LimitConnectionYamlValid() || zone.ConnectionLimits[clientIP].startConnection() {
+	if !zone.ConnectionLimits[clientIP].limitConf.YamlValid() || zone.ConnectionLimits[clientIP].startConnection() {
 
-		if !zone.RequestLimits[clientIP].limitConf.LimitRequestsYamlValid() || zone.RequestLimits[clientIP].startRequest() {
+		if !zone.RequestLimits[clientIP].limitConf.YamlValid() || zone.RequestLimits[clientIP].startRequest() {
 
 			lookupPath := strings.TrimPrefix(path.Clean(strings.TrimPrefix(req.URL.Path, "/"+zone.Config.Name+"/")), "/")
 
@@ -63,62 +63,103 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				lookupPath = lookupPath[:idx]
 			}
 
-			if zone.AccessLimits[lookupPath] == nil {
-				zone.AccessLimits[lookupPath] = NewAccessLimit(zone.Config.AccessLimit)
-			}
+			pexists, plistable := zone.Backend.Exists(lookupPath)
 
-			if zone.Backend.Exists(lookupPath) && !zone.AccessLimits[lookupPath].Gone {
-				if zone.AccessLimits[lookupPath].accessLimitReached() {
-					http.Error(rw, "Access Limit Reached", http.StatusForbidden)
+			if pexists {
+				if zone.AccessLimits[lookupPath] == nil {
+					zone.AccessLimits[lookupPath] = NewAccessLimit(zone.Config.AccessLimit)
+				}
+				if zone.AccessLimits[lookupPath].Gone {
+					setNeverCacheHeader(rw.Header())
+					http.Error(rw, "Object Gone", http.StatusGone)
 				} else {
-					if zone.AccessLimits[lookupPath].isExpired() {
-						http.Error(rw, "Object Expired", http.StatusGone)
+					if zone.AccessLimits[lookupPath].accessLimitReached() {
+						setNeverCacheHeader(rw.Header())
+						http.Error(rw, "Access Limit Reached", http.StatusForbidden)
 					} else {
-						fsSize := zone.Backend.Size(lookupPath)
-						rw.Header().Set("Content-Length", strconv.FormatInt(zone.Backend.Size(lookupPath), 10))
-						fsStrm := zone.Backend.OpenReader(lookupPath)
-						if bwlim.BandwidthLimitYamlValid() {
-							var fsIndex int64 = 0
-							for fsIndex < fsSize {
-								if fsSize-fsIndex < int64(bwlim.Bytes) {
-									n, err := io.CopyN(rw, fsStrm, fsSize-fsIndex)
-									if err != nil {
-										http.Error(rw, "Error Passing Data", http.StatusInternalServerError)
-										break
-									}
-									fsIndex += n
-								} else {
-									n, err := io.CopyN(rw, fsStrm, int64(bwlim.Bytes))
-									if err != nil {
-										break
-									}
-									fsIndex += n
-									time.Sleep(bwlim.Interval)
-								}
-							}
-							if fsIndex >= fsSize {
-								rw.WriteHeader(http.StatusOK)
-							}
+						if zone.AccessLimits[lookupPath].isExpired() {
+							setNeverCacheHeader(rw.Header())
+							http.Error(rw, "Object Expired", http.StatusGone)
 						} else {
-							_, err := io.Copy(rw, fsStrm)
+							fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
 							if err == nil {
-								rw.WriteHeader(http.StatusOK)
+								if plistable {
+									list, err := zone.Backend.List(lookupPath)
+									if err == nil {
+										setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+										fsSize = int64(lengthOfStringSlice(list))
+										rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+										rw.WriteHeader(http.StatusOK)
+										for i, cs := range list {
+											_, err = rw.Write([]byte(cs))
+											if err != nil {
+												break
+											}
+											if i < len(list)-1 {
+												_, err = rw.Write([]byte("\r\n"))
+												if err != nil {
+													break
+												}
+											}
+										}
+									} else {
+										setNeverCacheHeader(rw.Header())
+										http.Error(rw, "Object Expired", http.StatusGone)
+									}
+								} else {
+									if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
+										setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+									} else {
+										setExpiresHeader(rw.Header(), zone.AccessLimits[lookupPath].ExpireTime)
+										if zone.Config.PrivateCache {
+											rw.Header().Set("Cache-Control", "private")
+										}
+									}
+									if fsSize >= 0 {
+										rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+										if fsSize > 0 {
+											theMimeType := zone.Backend.MimeType(lookupPath)
+											if theMimeType != "" {
+												rw.Header().Set("Content-Type", theMimeType)
+											}
+											rw.WriteHeader(http.StatusOK)
+											var theWriter io.Writer
+											if bwlim.YamlValid() {
+												theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+											} else {
+												theWriter = rw
+											}
+											_ = zone.Backend.WriteData(lookupPath, theWriter)
+										} else {
+											rw.WriteHeader(http.StatusOK)
+										}
+									} else {
+										rw.WriteHeader(http.StatusForbidden)
+									}
+								}
+							} else {
+								setNeverCacheHeader(rw.Header())
+								http.Error(rw, "Stat Failure: "+err.Error(), http.StatusInternalServerError)
 							}
 						}
-						zone.Backend.CloseReader(fsStrm)
 					}
 				}
 			} else {
+				if zone.AccessLimits[lookupPath] != nil {
+					zone.AccessLimits[lookupPath] = nil
+				}
+				setNeverCacheHeader(rw.Header())
 				http.Error(rw, "Object Not Found", http.StatusNotFound)
 			}
-
 		} else {
+			setNeverCacheHeader(rw.Header())
 			http.Error(rw, "Too Many Requests", http.StatusTooManyRequests)
 		}
-		if zone.ConnectionLimits[clientIP].limitConf.LimitConnectionYamlValid() {
+		if zone.ConnectionLimits[clientIP].limitConf.YamlValid() {
 			zone.ConnectionLimits[clientIP].stopConnection()
 		}
 	} else {
+		setNeverCacheHeader(rw.Header())
 		http.Error(rw, "Too Many Connections", http.StatusTooManyRequests)
 	}
 }
@@ -134,6 +175,37 @@ func (zone *Zone) ZoneHostAllowed(host string) bool {
 		}
 		return false
 	}
+}
+
+func setNeverCacheHeader(header http.Header) {
+	header.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
+}
+
+func setExpiresHeader(header http.Header, expireTime time.Time) {
+	header.Set("Expires", expireTime.UTC().Format(http.TimeFormat))
+}
+
+func setCacheHeaderWithAge(header http.Header, maxAge uint, modifiedTime time.Time, isPrivate bool) {
+	header.Set("Cache-Control", "max-age="+strconv.Itoa(int(maxAge))+", must-revalidate")
+	if isPrivate {
+		header.Set("Cache-Control", header.Get("Cache-Control")+", private")
+	}
+	if maxAge > 0 {
+		theAge := uint64(time.Now().UTC().Second()-modifiedTime.UTC().Second()) % uint64(maxAge)
+		if theAge < 0 {
+			theAge *= -1
+		}
+		header.Set("Age", strconv.FormatUint(theAge, 10))
+	}
+}
+
+func lengthOfStringSlice(theSlice []string) int {
+	theLength := 0
+	for _, cstr := range theSlice {
+		theLength += len(cstr)
+	}
+	theLength += (len(theSlice) - 1) * 2
+	return theLength
 }
 
 func NewAccessLimit(conf structure.AccessLimitYaml) *AccessLimit {
@@ -238,4 +310,51 @@ func (cl *ConnectionLimit) stopConnection() {
 	cl.mu.Lock()
 	cl.connectionsRemaining++
 	cl.mu.Unlock()
+}
+
+func GetLimitedBandwidthWriter(bly structure.BandwidthLimitYaml, targetWriter io.Writer) io.Writer {
+	return &LimitedBandwidthWriter{
+		passedWriter:      targetWriter,
+		passedWriterIndex: 0,
+		limiterSettings:   bly,
+	}
+}
+
+type LimitedBandwidthWriter struct {
+	passedWriter      io.Writer
+	passedWriterIndex uint
+	limiterSettings   structure.BandwidthLimitYaml
+}
+
+func (lbw *LimitedBandwidthWriter) Write(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	var currentArrayIndex uint = 0
+	for currentArrayIndex < uint(len(p)) {
+		if currentArrayIndex+(lbw.limiterSettings.Bytes-lbw.passedWriterIndex) < uint(len(p)) {
+			writtenIn := make([]byte, lbw.limiterSettings.Bytes-lbw.passedWriterIndex)
+			written, err := lbw.passedWriter.Write(writtenIn)
+			if err != nil {
+				return int(currentArrayIndex), err
+			}
+			copy(p[currentArrayIndex:], writtenIn[0:written])
+			currentArrayIndex += uint(written)
+			lbw.passedWriterIndex += uint(written)
+		} else {
+			writtenIn := make([]byte, uint(len(p))-currentArrayIndex)
+			written, err := lbw.passedWriter.Write(writtenIn)
+			if err != nil {
+				return int(currentArrayIndex), err
+			}
+			copy(p[currentArrayIndex:], writtenIn[0:written])
+			currentArrayIndex += uint(written)
+			lbw.passedWriterIndex += uint(written)
+		}
+		if lbw.passedWriterIndex >= lbw.limiterSettings.Bytes {
+			lbw.passedWriterIndex = lbw.passedWriterIndex - lbw.limiterSettings.Bytes
+			time.Sleep(lbw.limiterSettings.Interval)
+		}
+	}
+	return len(p), nil
 }
