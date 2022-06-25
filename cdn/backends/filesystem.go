@@ -161,7 +161,9 @@ func (b *BackendFilesystem) directStats(path string) (size int64, modified time.
 
 func (b *BackendFilesystem) Purge(path string) (err error) {
 	b.syncer.Lock()
-	b.fileObjects[path] = nil
+	if _, ok := b.fileObjects[path]; ok {
+		b.fileObjects[path] = nil
+	}
 	b.syncer.Unlock()
 	return nil
 }
