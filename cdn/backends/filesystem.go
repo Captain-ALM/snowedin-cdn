@@ -1,6 +1,7 @@
 package backends
 
 import (
+	"errors"
 	"io"
 	"mime"
 	"os"
@@ -29,12 +30,30 @@ func NewBackendFilesystem(confMap map[string]string) *BackendFilesystem {
 	}
 	var ecfo = false
 	if confMap["existsCheckCanFileOpen"] != "" {
-		ecfo, _ = strconv.ParseBool("existsCheckCanFileOpen")
+		ecfo, _ = strconv.ParseBool(confMap["existsCheckCanFileOpen"])
+	}
+	var wmod = false
+	if confMap["watchModified"] != "" {
+		wmod, _ = strconv.ParseBool(confMap["watchModified"])
+	}
+	var mtbe = true
+	if confMap["mimeTypeByExtension"] != "" {
+		lmtbe, err := strconv.ParseBool(confMap["mimeTypeByExtension"])
+		if err == nil {
+			mtbe = lmtbe
+		}
+	}
+	var dirl = false
+	if confMap["listDirectories"] != "" {
+		dirl, _ = strconv.ParseBool(confMap["listDirectories"])
 	}
 	return &BackendFilesystem{
 		directoryPath:       directory,
 		cachedHeaderBytes:   chb,
 		existsCheckFileOpen: ecfo,
+		watchModified:       wmod,
+		mimeTypeByExtension: mtbe,
+		directoryListing:    dirl,
 		fileObjects:         make(map[string]*FileObject),
 	}
 }
@@ -43,12 +62,20 @@ type BackendFilesystem struct {
 	directoryPath       string
 	cachedHeaderBytes   uint
 	existsCheckFileOpen bool
+	watchModified       bool
+	mimeTypeByExtension bool
+	directoryListing    bool
 	fileObjects         map[string]*FileObject
 	syncer              sync.Mutex
 }
 
 func (b *BackendFilesystem) MimeType(path string) (mimetype string) {
-	return mime.TypeByExtension(path)
+	pext := pth.Ext(path)
+	if b.mimeTypeByExtension && pext != "" {
+		return mime.TypeByExtension(pext)
+	} else {
+		return ""
+	}
 }
 
 func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
@@ -56,10 +83,23 @@ func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
 	if fobj == nil {
 		return err
 	} else {
-		multWriter := io.MultiWriter(rw, fobj)
-		fobjReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
-		defer fobjReader.Close()
-		_, err := io.Copy(multWriter, fobjReader)
+		if fobj.size < 0 {
+			return errors.New("object not writeable")
+		}
+		var theWriter io.Writer
+		var theReader io.ReadCloser
+		if fobj.cacheWriteIndex >= len(fobj.cache) {
+			theWriter = rw
+			theReader = NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
+		} else {
+			theWriter = io.MultiWriter(rw, fobj)
+			theReader, err = os.Open(pth.Join(b.directoryPath, path))
+			if err != nil {
+				return err
+			}
+		}
+		defer theReader.Close()
+		_, err = io.Copy(theWriter, theReader)
 		if err != nil {
 			return err
 		}
@@ -79,10 +119,27 @@ func (b *BackendFilesystem) Stats(path string) (size int64, modified time.Time, 
 func (b *BackendFilesystem) getFileObject(path string) (*FileObject, error) {
 	b.syncer.Lock()
 	defer b.syncer.Unlock()
+	if b.watchModified && b.fileObjects[path] != nil {
+		sz, tm, err := b.directStats(path)
+		if err == nil && (sz != b.fileObjects[path].size || !tm.Equal(b.fileObjects[path].modifyTime)) {
+			b.fileObjects[path] = nil
+		} else if err != nil {
+			return nil, err
+		}
+	}
 	if b.fileObjects[path] == nil {
 		sz, tm, err := b.directStats(path)
 		if err == nil {
-			b.fileObjects[path] = NewFileObject(b.cachedHeaderBytes, sz, tm)
+			if sz < 0 {
+				return &FileObject{
+					cache:           nil,
+					cacheWriteIndex: 0,
+					modifyTime:      tm,
+					size:            -1,
+				}, nil
+			} else {
+				b.fileObjects[path] = NewFileObject(b.cachedHeaderBytes, sz, tm)
+			}
 		} else {
 			return nil, err
 		}
@@ -92,30 +149,39 @@ func (b *BackendFilesystem) getFileObject(path string) (*FileObject, error) {
 
 func (b *BackendFilesystem) directStats(path string) (size int64, modified time.Time, err error) {
 	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
-		return fstats.Size(), fstats.ModTime(), nil
+		if fstats.IsDir() {
+			return -1, fstats.ModTime(), nil
+		} else {
+			return fstats.Size(), fstats.ModTime(), nil
+		}
 	} else {
 		return 0, time.Time{}, err
 	}
 }
 
 func (b *BackendFilesystem) Purge(path string) (err error) {
-	return os.Remove(pth.Join(b.directoryPath, path))
+	b.syncer.Lock()
+	b.fileObjects[path] = nil
+	b.syncer.Unlock()
+	return nil
 }
 
-func (b *BackendFilesystem) Exists(path string) bool {
+func (b *BackendFilesystem) Exists(path string) (exists bool, listable bool) {
 	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
-		if !fstats.IsDir() {
+		if fstats.IsDir() {
+			return b.directoryListing, true
+		} else {
 			if b.existsCheckFileOpen {
 				if file, err := os.Open(pth.Join(b.directoryPath, path)); err == nil {
 					_ = file.Close()
-					return true
+					return true, false
 				}
 			} else {
-				return true
+				return true, false
 			}
 		}
 	}
-	return false
+	return false, false
 }
 
 func (b *BackendFilesystem) List(path string) (entries []string, err error) {
@@ -156,10 +222,6 @@ func (fobj *FileObject) Write(p []byte) (n int, err error) {
 		fobj.cacheWriteIndex += len(p)
 	}
 	return len(p), nil
-}
-
-func (fobj *FileObject) cacheWritten() bool {
-	return fobj.cacheWriteIndex >= len(fobj.cache)
 }
 
 func NewFileObjectReader(targetPath string, fObj *FileObject) *FileObjectReader {
@@ -203,9 +265,11 @@ func (fobjr *FileObjectReader) Read(p []byte) (n int, err error) {
 			if err != nil {
 				return 0, err
 			}
-			_, err = nf.Seek(fobjr.cacheReadIndex, 0)
-			if err != nil {
-				return 0, err
+			if fobjr.cacheReadIndex > 0 {
+				_, err = nf.Seek(fobjr.cacheReadIndex, 0)
+				if err != nil {
+					return 0, err
+				}
 			}
 			fobjr.filePointer = nf
 		}

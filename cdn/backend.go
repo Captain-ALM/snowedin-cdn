@@ -11,7 +11,7 @@ type Backend interface {
 	MimeType(path string) (mimetype string)
 	Stats(path string) (size int64, modified time.Time, err error)
 	Purge(path string) (err error)
-	Exists(path string) bool
+	Exists(path string) (exists bool, listable bool)
 	List(path string) (entries []string, err error)
 }
 
