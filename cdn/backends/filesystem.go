@@ -190,7 +190,7 @@ func (b *BackendFilesystem) List(path string) (entries []string, err error) {
 	if dir, err := os.ReadDir(pth.Join(b.directoryPath, path)); err == nil {
 		contents := make([]string, len(dir))
 		for i, d := range dir {
-			contents[i] = pth.Join(b.directoryPath, path, d.Name())
+			contents[i] = pth.Join(path, d.Name())
 		}
 		return contents, nil
 	} else {
