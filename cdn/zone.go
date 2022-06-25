@@ -191,11 +191,11 @@ func setCacheHeaderWithAge(header http.Header, maxAge uint, modifiedTime time.Ti
 		header.Set("Cache-Control", header.Get("Cache-Control")+", private")
 	}
 	if maxAge > 0 {
-		theAge := uint64(time.Now().UTC().Second()-modifiedTime.UTC().Second()) % uint64(maxAge)
-		if theAge < 0 {
-			theAge *= -1
+		checkerSecondsBetween := time.Now().UTC().Second() - modifiedTime.UTC().Second()
+		if checkerSecondsBetween < 0 {
+			checkerSecondsBetween *= -1
 		}
-		header.Set("Age", strconv.FormatUint(theAge, 10))
+		header.Set("Age", strconv.FormatUint(uint64(checkerSecondsBetween)%uint64(maxAge), 10))
 	}
 }
 
