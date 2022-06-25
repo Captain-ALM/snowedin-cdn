@@ -3,16 +3,16 @@ package cdn
 import (
 	"io"
 	"snow.mrmelon54.xyz/snowedin/cdn/backends"
+	"time"
 )
 
 type Backend interface {
-	OpenReader(path string) io.Reader
-	CloseReader(reader io.Reader)
-	Purge(path string)
+	WriteData(path string, rw io.Writer) (err error)
+	MimeType(path string) (mimetype string)
+	Stats(path string) (size int64, modified time.Time, err error)
+	Purge(path string) (err error)
 	Exists(path string) bool
-	Updated(path string) bool
-	List(path string) []string
-	Size(path string) int64
+	List(path string) (entries []string, err error)
 }
 
 func NewBackendFromName(name string, confMap map[string]string) Backend {
