@@ -89,13 +89,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 								fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
 								if err == nil {
 									theETag := zone.Backend.ETag(lookupPath)
-									if theETag == "" {
-										theETag = getValueForETagUsingAttributes(fsMod, fsSize)
-									}
 									if plistable {
 										list, err := zone.Backend.List(lookupPath)
 										if err == nil {
-											rw.Header().Set("ETag", theETag)
 											setLastModifiedHeader(rw.Header(), fsMod)
 											if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
 												setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
@@ -106,6 +102,10 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												}
 											}
 											fsSize = int64(lengthOfStringSlice(list))
+											if theETag == "" {
+												theETag = getValueForETagUsingAttributes(fsMod, fsSize)
+											}
+											rw.Header().Set("ETag", theETag)
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
 											if processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
 												logPrintln(4, "Send Start")
@@ -138,6 +138,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
 										}
 									} else {
+										if theETag == "" {
+											theETag = getValueForETagUsingAttributes(fsMod, fsSize)
+										}
 										rw.Header().Set("ETag", theETag)
 										setLastModifiedHeader(rw.Header(), fsMod)
 										if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
@@ -174,7 +177,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
 											}
 										} else {
-											logHeaders(rw.Header())
+											switchToNonCachingHeaders(rw.Header())
 											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
 										}
 									}
