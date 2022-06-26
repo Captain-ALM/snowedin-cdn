@@ -35,14 +35,16 @@ func (ly ListenYaml) GetWriteTimeout() time.Duration {
 }
 
 type ZoneYaml struct {
-	Name            string            `yaml:"name"`
-	Domains         []string          `yaml:"domains"`
-	MaxAge          uint              `yaml:"maxAge"`
-	PrivateCache    bool              `yaml:"privateCache"`
-	AccessLimit     AccessLimitYaml   `yaml:"accessLimit"`
-	Limits          LimitsYaml        `yaml:"limits"`
-	Backend         string            `yaml:"backend"`
-	BackendSettings map[string]string `yaml:"backendSettings"`
+	Name                                 string            `yaml:"name"`
+	Domains                              []string          `yaml:"domains"`
+	MaxAge                               uint              `yaml:"maxAge"`
+	PrivateCache                         bool              `yaml:"privateCache"`
+	NotModifiedResponseUsingLastModified bool              `yaml:"notModifiedResponseUsingLastModified"`
+	NotModifiedResponseUsingETags        bool              `yaml:"notModifiedResponseUsingETags"`
+	AccessLimit                          AccessLimitYaml   `yaml:"accessLimit"`
+	Limits                               LimitsYaml        `yaml:"limits"`
+	Backend                              string            `yaml:"backend"`
+	BackendSettings                      map[string]string `yaml:"backendSettings"`
 }
 
 type AccessLimitYaml struct {

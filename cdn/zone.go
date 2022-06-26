@@ -3,14 +3,11 @@ package cdn
 import (
 	"github.com/tomasen/realip"
 	"io"
-	"log"
 	"net/http"
 	"path"
 	"snow.mrmelon54.xyz/snowedin/structure"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 )
 
 var LogLevel uint = 0
@@ -102,7 +99,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											setLastModifiedHeader(rw.Header(), fsMod)
 											fsSize = int64(lengthOfStringSlice(list))
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											if processIfModSince(rw, req, fsMod) {
+											if processIfModSince(rw, req, fsMod, zone.Config.NotModifiedResponseUsingLastModified) {
 												logPrintln(4, "Send Start")
 												var theWriter io.Writer
 												if bwlim.YamlValid() {
@@ -150,7 +147,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												if theMimeType != "" {
 													rw.Header().Set("Content-Type", theMimeType)
 												}
-												if processIfModSince(rw, req, fsMod) {
+												if processIfModSince(rw, req, fsMod, zone.Config.NotModifiedResponseUsingLastModified) {
 													logPrintln(4, "Send Start")
 													var theWriter io.Writer
 													if bwlim.YamlValid() {
@@ -166,7 +163,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													}
 												}
 											} else {
-												processIfModSince(rw, req, fsMod)
+												processIfModSince(rw, req, fsMod, zone.Config.NotModifiedResponseUsingLastModified)
 											}
 										} else {
 											logHeaders(rw.Header())
@@ -231,243 +228,5 @@ func (zone *Zone) ZoneHostAllowed(host string) bool {
 			}
 		}
 		return false
-	}
-}
-
-func processIfModSince(rw http.ResponseWriter, req *http.Request, modT time.Time) bool {
-	if !modT.IsZero() && req.Header.Get("If-Modified-Since") != "" {
-		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Modified-Since"))
-		if err == nil {
-			if modT.Before(parse) || strings.EqualFold(modT.Format(http.TimeFormat), req.Header.Get("If-Modified-Since")) {
-				logHeaders(rw.Header())
-				rw.WriteHeader(http.StatusNotModified)
-				logPrintln(2, "304 Not Modified")
-				logPrintln(4, "Send Skipped")
-				return false
-			}
-		}
-	}
-	if !modT.IsZero() && req.Header.Get("If-Unmodified-Since") != "" {
-		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Unmodified-Since"))
-		if err == nil {
-			if modT.After(parse) {
-				setNeverCacheHeader(rw.Header())
-				if rw.Header().Get("Last-Modified") != "" {
-					rw.Header().Del("Last-Modified")
-				}
-				if rw.Header().Get("Age") != "" {
-					rw.Header().Del("Age")
-				}
-				if rw.Header().Get("Expires") != "" {
-					rw.Header().Del("Expires")
-				}
-				logHeaders(rw.Header())
-				rw.WriteHeader(http.StatusPreconditionFailed)
-				logPrintln(2, "412 Precondition Failed")
-				logPrintln(4, "Send Condition Not Satisfied")
-				return false
-			}
-		}
-	}
-	logHeaders(rw.Header())
-	rw.WriteHeader(http.StatusOK)
-	logPrintln(2, "200 OK")
-	return true
-}
-
-func setNeverCacheHeader(header http.Header) {
-	header.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
-}
-
-func setExpiresHeader(header http.Header, expireTime time.Time) {
-	header.Set("Expires", expireTime.UTC().Format(http.TimeFormat))
-}
-
-func setLastModifiedHeader(header http.Header, modTime time.Time) {
-	header.Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
-}
-
-func setCacheHeaderWithAge(header http.Header, maxAge uint, modifiedTime time.Time, isPrivate bool) {
-	header.Set("Cache-Control", "max-age="+strconv.Itoa(int(maxAge))+", must-revalidate")
-	if isPrivate {
-		header.Set("Cache-Control", header.Get("Cache-Control")+", private")
-	}
-	if maxAge > 0 {
-		checkerSecondsBetween := int64(time.Now().UTC().Sub(modifiedTime.UTC()).Seconds())
-		if checkerSecondsBetween < 0 {
-			checkerSecondsBetween *= -1
-		}
-		header.Set("Age", strconv.FormatUint(uint64(checkerSecondsBetween)%uint64(maxAge), 10))
-	}
-}
-
-func lengthOfStringSlice(theSlice []string) int {
-	theLength := 0
-	for _, cstr := range theSlice {
-		theLength += len(cstr)
-	}
-	theLength += (len(theSlice) - 1) * 2
-	return theLength
-}
-
-func NewAccessLimit(conf structure.AccessLimitYaml) *AccessLimit {
-	expr := time.Now().Add(conf.ExpireTime)
-	if conf.ExpireTime.Seconds() < 1 {
-		expr = time.Time{}
-	}
-	return &AccessLimit{
-		ExpireTime:        expr,
-		Gone:              false,
-		AccessLimit:       conf.AccessLimit != 0,
-		AccessesRemaining: conf.AccessLimit,
-	}
-}
-
-type AccessLimit struct {
-	ExpireTime        time.Time
-	Gone              bool
-	AccessLimit       bool
-	AccessesRemaining uint
-}
-
-func (al *AccessLimit) isExpired() bool {
-	if al.ExpireTime.IsZero() {
-		return false
-	} else {
-		if al.ExpireTime.After(time.Now()) {
-			return false
-		} else {
-			return true
-		}
-	}
-}
-
-func (al *AccessLimit) accessLimitReached() bool {
-	if al.AccessLimit {
-		if al.AccessesRemaining == 0 {
-			return true
-		} else {
-			al.AccessesRemaining--
-		}
-	}
-	return false
-}
-
-func NewRequestLimit(conf structure.LimitRequestsYaml) *RequestLimit {
-	return &RequestLimit{
-		expireTime:        time.Now().Add(conf.RequestRateInterval),
-		requestsRemaining: conf.MaxRequests,
-		limitConf:         conf,
-	}
-}
-
-type RequestLimit struct {
-	mu                sync.Mutex
-	expireTime        time.Time
-	requestsRemaining uint
-	limitConf         structure.LimitRequestsYaml
-}
-
-func (rl *RequestLimit) startRequest() bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	if rl.expireTime.After(time.Now()) {
-		if rl.requestsRemaining == 0 {
-			return false
-		} else {
-			rl.requestsRemaining--
-		}
-	} else {
-		rl.expireTime = time.Now().Add(rl.limitConf.RequestRateInterval)
-		rl.requestsRemaining = rl.limitConf.MaxRequests - 1
-	}
-	return true
-}
-
-func NewConnectionLimit(conf structure.LimitConnectionYaml) *ConnectionLimit {
-	return &ConnectionLimit{
-		connectionsRemaining: conf.MaxConnections,
-		limitConf:            conf,
-	}
-}
-
-type ConnectionLimit struct {
-	mu                   sync.Mutex
-	connectionsRemaining uint
-	limitConf            structure.LimitConnectionYaml
-}
-
-func (cl *ConnectionLimit) startConnection() bool {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-	if cl.connectionsRemaining == 0 {
-		return false
-	} else {
-		cl.connectionsRemaining--
-		return true
-	}
-}
-
-func (cl *ConnectionLimit) stopConnection() {
-	cl.mu.Lock()
-	cl.connectionsRemaining++
-	cl.mu.Unlock()
-}
-
-func GetLimitedBandwidthWriter(bly structure.BandwidthLimitYaml, targetWriter io.Writer) io.Writer {
-	return &LimitedBandwidthWriter{
-		passedWriter:      targetWriter,
-		passedWriterIndex: 0,
-		limiterSettings:   bly,
-	}
-}
-
-type LimitedBandwidthWriter struct {
-	passedWriter      io.Writer
-	passedWriterIndex uint
-	limiterSettings   structure.BandwidthLimitYaml
-}
-
-func (lbw *LimitedBandwidthWriter) Write(p []byte) (n int, err error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	var currentArrayIndex uint = 0
-	for currentArrayIndex < uint(len(p)) {
-		if currentArrayIndex+(lbw.limiterSettings.Bytes-lbw.passedWriterIndex) < uint(len(p)) {
-			written, err := lbw.passedWriter.Write(p[currentArrayIndex : currentArrayIndex+(lbw.limiterSettings.Bytes-lbw.passedWriterIndex)])
-			currentArrayIndex += uint(written)
-			lbw.passedWriterIndex += uint(written)
-			if err != nil {
-				return int(currentArrayIndex), err
-			}
-		} else {
-			written, err := lbw.passedWriter.Write(p[currentArrayIndex:])
-			currentArrayIndex += uint(written)
-			lbw.passedWriterIndex += uint(written)
-			if err != nil {
-				return int(currentArrayIndex), err
-			}
-		}
-
-		if lbw.passedWriterIndex >= lbw.limiterSettings.Bytes {
-			lbw.passedWriterIndex = lbw.passedWriterIndex - lbw.limiterSettings.Bytes
-			time.Sleep(lbw.limiterSettings.Interval)
-		}
-	}
-	return len(p), nil
-}
-
-func logPrintln(minLevel uint, toLog string) {
-	if LogLevel >= minLevel {
-		log.Println("[Http] [Zone] " + toLog)
-	}
-}
-
-func logHeaders(headers http.Header) {
-	if LogLevel >= 3 {
-		for k := range headers {
-			log.Println("[Http] [Zone] [Header] " + k + ": " + headers.Get(k))
-		}
 	}
 }
