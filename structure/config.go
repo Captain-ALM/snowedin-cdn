@@ -35,23 +35,27 @@ func (ly ListenYaml) GetWriteTimeout() time.Duration {
 }
 
 type ZoneYaml struct {
-	Name                                  string            `yaml:"name"`
-	Domains                               []string          `yaml:"domains"`
-	MaxAge                                uint              `yaml:"maxAge"`
-	PrivateCache                          bool              `yaml:"privateCache"`
-	NotModifiedResponseUsingLastModified  bool              `yaml:"notModifiedResponseUsingLastModified"`
-	NotModifiedResponseUsingETags         bool              `yaml:"notModifiedResponseUsingETags"`
-	CanNotModifiedCheckWhenRequestLimited bool              `yaml:"canNotModifiedCheckWhenRequestLimited"`
-	AccessLimit                           AccessLimitYaml   `yaml:"accessLimit"`
-	Limits                                LimitsYaml        `yaml:"limits"`
-	Backend                               string            `yaml:"backend"`
-	BackendSettings                       map[string]string `yaml:"backendSettings"`
+	Name            string            `yaml:"name"`
+	Domains         []string          `yaml:"domains"`
+	CacheResponse   CacheSettingsYaml `yaml:"cacheResponse"`
+	AccessLimit     AccessLimitYaml   `yaml:"accessLimit"`
+	Limits          LimitsYaml        `yaml:"limits"`
+	Backend         string            `yaml:"backend"`
+	BackendSettings map[string]string `yaml:"backendSettings"`
 }
 
 type AccessLimitYaml struct {
 	PurgeExpired bool          `yaml:"purgeExpired"`
 	ExpireTime   time.Duration `yaml:"expireTime"`
 	AccessLimit  uint          `yaml:"accessLimit"`
+}
+
+type CacheSettingsYaml struct {
+	MaxAge                               uint `yaml:"maxAge"`
+	PrivateCache                         bool `yaml:"privateCache"`
+	NotModifiedResponseUsingLastModified bool `yaml:"notModifiedUsingLastModified"`
+	NotModifiedResponseUsingETags        bool `yaml:"notModifiedUsingETags"`
+	RequestLimitedCacheCheck             bool `yaml:"requestLimitedCacheCheck"`
 }
 
 type LimitsYaml struct {

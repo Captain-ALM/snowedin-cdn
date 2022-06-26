@@ -15,7 +15,7 @@ var LogLevel uint = 0
 
 func NewZone(conf structure.ZoneYaml, logLevel uint) *Zone {
 	var thePathAttributes map[string]*ZonePathAttributes
-	if conf.CanNotModifiedCheckWhenRequestLimited {
+	if conf.CacheResponse.RequestLimitedCacheCheck {
 		thePathAttributes = make(map[string]*ZonePathAttributes)
 	}
 	cZone := &Zone{
@@ -103,10 +103,10 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 										if err == nil {
 											setLastModifiedHeader(rw.Header(), fsMod)
 											if zLAccessLimts.ExpireTime.IsZero() {
-												setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+												setCacheHeaderWithAge(rw.Header(), zone.Config.CacheResponse.MaxAge, fsMod, zone.Config.CacheResponse.PrivateCache)
 											} else {
 												setExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
-												if zone.Config.PrivateCache {
+												if zone.Config.CacheResponse.PrivateCache {
 													rw.Header().Set("Cache-Control", "private")
 												}
 											}
@@ -116,7 +116,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											}
 											rw.Header().Set("ETag", theETag)
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
+											if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
 												logPrintln(4, "Send Start")
 												var theWriter io.Writer
 												if bwlim.YamlValid() {
@@ -142,7 +142,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													logPrintln(4, "Send Complete")
 												}
 											}
-											if zone.Config.CanNotModifiedCheckWhenRequestLimited {
+											if zone.Config.CacheResponse.RequestLimitedCacheCheck {
 												if zone.PathAttributes[lookupPath] == nil {
 													zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
 												} else {
@@ -160,10 +160,10 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 										rw.Header().Set("ETag", theETag)
 										setLastModifiedHeader(rw.Header(), fsMod)
 										if zLAccessLimts.ExpireTime.IsZero() {
-											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+											setCacheHeaderWithAge(rw.Header(), zone.Config.CacheResponse.MaxAge, fsMod, zone.Config.CacheResponse.PrivateCache)
 										} else {
 											setExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
-											if zone.Config.PrivateCache {
+											if zone.Config.CacheResponse.PrivateCache {
 												rw.Header().Set("Cache-Control", "private")
 											}
 										}
@@ -174,7 +174,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												if theMimeType != "" {
 													rw.Header().Set("Content-Type", theMimeType)
 												}
-												if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
+												if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
 													logPrintln(4, "Send Start")
 													var theWriter io.Writer
 													if bwlim.YamlValid() {
@@ -190,9 +190,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													}
 												}
 											} else {
-												processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
+												processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
 											}
-											if zone.Config.CanNotModifiedCheckWhenRequestLimited {
+											if zone.Config.CacheResponse.RequestLimitedCacheCheck {
 												if zone.PathAttributes[lookupPath] == nil {
 													zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
 												} else {
@@ -214,7 +214,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 				} else if req.Method == http.MethodDelete {
 					err := zone.Backend.Purge(lookupPath)
-					if zone.Config.CanNotModifiedCheckWhenRequestLimited && zone.PathAttributes[lookupPath] != nil {
+					if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil {
 						zone.PathAttributes[lookupPath].NotExpunged = false
 					}
 					setNeverCacheHeader(rw.Header())
@@ -228,7 +228,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				}
 
 			} else {
-				if zone.Config.CanNotModifiedCheckWhenRequestLimited && zone.PathAttributes[lookupPath] != nil {
+				if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil {
 					zone.PathAttributes[lookupPath].NotExpunged = false
 				}
 				if zone.AccessLimits[lookupPath] != nil {
@@ -238,9 +238,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotFound, "Object Not Found")
 			}
 		} else {
-			if zone.Config.CanNotModifiedCheckWhenRequestLimited && zone.PathAttributes[lookupPath] != nil && zone.PathAttributes[lookupPath].NotExpunged {
+			if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil && zone.PathAttributes[lookupPath].NotExpunged {
 				zone.PathAttributes[lookupPath].UpdateHeader(rw.Header())
-				processSupportedPreconditions429(rw, req, zone.PathAttributes[lookupPath].lastModifiedTime, zone.PathAttributes[lookupPath].eTag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
+				processSupportedPreconditions429(rw, req, zone.PathAttributes[lookupPath].lastModifiedTime, zone.PathAttributes[lookupPath].eTag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
 			} else {
 				setNeverCacheHeader(rw.Header())
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Requests")
