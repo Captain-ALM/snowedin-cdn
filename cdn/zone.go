@@ -8,17 +8,23 @@ import (
 	"snow.mrmelon54.xyz/snowedin/structure"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var LogLevel uint = 0
 
 func NewZone(conf structure.ZoneYaml, logLevel uint) *Zone {
+	var thePathAttributes map[string]*ZonePathAttributes
+	if conf.CanNotModifiedCheckWhenRequestLimited {
+		thePathAttributes = make(map[string]*ZonePathAttributes)
+	}
 	cZone := &Zone{
 		Config:           conf,
 		Backend:          NewBackendFromName(conf.Backend, conf.BackendSettings),
 		AccessLimits:     make(map[string]*AccessLimit),
 		RequestLimits:    make(map[string]*RequestLimit),
 		ConnectionLimits: make(map[string]*ConnectionLimit),
+		PathAttributes:   thePathAttributes,
 	}
 	if cZone.Backend == nil {
 		return nil
@@ -33,6 +39,7 @@ type Zone struct {
 	AccessLimits     map[string]*AccessLimit
 	RequestLimits    map[string]*RequestLimit
 	ConnectionLimits map[string]*ConnectionLimit
+	PathAttributes   map[string]*ZonePathAttributes
 }
 
 func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
@@ -56,33 +63,35 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 	if !zone.ConnectionLimits[clientIP].limitConf.YamlValid() || zone.ConnectionLimits[clientIP].startConnection() {
 
+		lookupPath := strings.TrimPrefix(path.Clean(strings.TrimPrefix(req.URL.Path, "/"+zone.Config.Name+"/")), "/")
+
+		if idx := strings.IndexAny(lookupPath, "?"); idx > -1 {
+			lookupPath = lookupPath[:idx]
+		}
+
 		if !zone.RequestLimits[clientIP].limitConf.YamlValid() || zone.RequestLimits[clientIP].startRequest() {
-
-			lookupPath := strings.TrimPrefix(path.Clean(strings.TrimPrefix(req.URL.Path, "/"+zone.Config.Name+"/")), "/")
-
-			if idx := strings.IndexAny(lookupPath, "?"); idx > -1 {
-				lookupPath = lookupPath[:idx]
-			}
 
 			pexists, plistable := zone.Backend.Exists(lookupPath)
 
 			if pexists {
 
-				if zone.AccessLimits[lookupPath] == nil {
-					zone.AccessLimits[lookupPath] = NewAccessLimit(zone.Config.AccessLimit)
+				zLAccessLimts := zone.AccessLimits[lookupPath]
+				if zLAccessLimts == nil {
+					zLAccessLimts = NewAccessLimit(zone.Config.AccessLimit)
+					zone.AccessLimits[lookupPath] = zLAccessLimts
 				}
 
 				if req.Method == http.MethodGet || req.Method == http.MethodHead {
 
-					if zone.AccessLimits[lookupPath].Gone {
+					if zLAccessLimts.Gone {
 						setNeverCacheHeader(rw.Header())
 						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Gone")
 					} else {
-						if zone.AccessLimits[lookupPath].accessLimitReached() {
+						if zLAccessLimts.accessLimitReached() {
 							setNeverCacheHeader(rw.Header())
 							writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "Access Limit Reached")
 						} else {
-							if zone.AccessLimits[lookupPath].isExpired() {
+							if zLAccessLimts.isExpired() {
 								setNeverCacheHeader(rw.Header())
 								writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
 							} else {
@@ -93,10 +102,10 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 										list, err := zone.Backend.List(lookupPath)
 										if err == nil {
 											setLastModifiedHeader(rw.Header(), fsMod)
-											if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
+											if zLAccessLimts.ExpireTime.IsZero() {
 												setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
 											} else {
-												setExpiresHeader(rw.Header(), zone.AccessLimits[lookupPath].ExpireTime)
+												setExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
 												if zone.Config.PrivateCache {
 													rw.Header().Set("Cache-Control", "private")
 												}
@@ -107,7 +116,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											}
 											rw.Header().Set("ETag", theETag)
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											if processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
+											if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
 												logPrintln(4, "Send Start")
 												var theWriter io.Writer
 												if bwlim.YamlValid() {
@@ -133,6 +142,13 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													logPrintln(4, "Send Complete")
 												}
 											}
+											if zone.Config.CanNotModifiedCheckWhenRequestLimited {
+												if zone.PathAttributes[lookupPath] == nil {
+													zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
+												} else {
+													zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
+												}
+											}
 										} else {
 											setNeverCacheHeader(rw.Header())
 											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
@@ -143,10 +159,10 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 										}
 										rw.Header().Set("ETag", theETag)
 										setLastModifiedHeader(rw.Header(), fsMod)
-										if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
+										if zLAccessLimts.ExpireTime.IsZero() {
 											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
 										} else {
-											setExpiresHeader(rw.Header(), zone.AccessLimits[lookupPath].ExpireTime)
+											setExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
 											if zone.Config.PrivateCache {
 												rw.Header().Set("Cache-Control", "private")
 											}
@@ -158,7 +174,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												if theMimeType != "" {
 													rw.Header().Set("Content-Type", theMimeType)
 												}
-												if processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
+												if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
 													logPrintln(4, "Send Start")
 													var theWriter io.Writer
 													if bwlim.YamlValid() {
@@ -174,7 +190,14 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													}
 												}
 											} else {
-												processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
+												processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
+											}
+											if zone.Config.CanNotModifiedCheckWhenRequestLimited {
+												if zone.PathAttributes[lookupPath] == nil {
+													zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
+												} else {
+													zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
+												}
 											}
 										} else {
 											switchToNonCachingHeaders(rw.Header())
@@ -191,6 +214,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 				} else if req.Method == http.MethodDelete {
 					err := zone.Backend.Purge(lookupPath)
+					if zone.Config.CanNotModifiedCheckWhenRequestLimited && zone.PathAttributes[lookupPath] != nil {
+						zone.PathAttributes[lookupPath].NotExpunged = false
+					}
 					setNeverCacheHeader(rw.Header())
 					if err == nil {
 						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
@@ -202,6 +228,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				}
 
 			} else {
+				if zone.Config.CanNotModifiedCheckWhenRequestLimited && zone.PathAttributes[lookupPath] != nil {
+					zone.PathAttributes[lookupPath].NotExpunged = false
+				}
 				if zone.AccessLimits[lookupPath] != nil {
 					zone.AccessLimits[lookupPath] = nil
 				}
@@ -209,8 +238,13 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotFound, "Object Not Found")
 			}
 		} else {
-			setNeverCacheHeader(rw.Header())
-			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Requests")
+			if zone.Config.CanNotModifiedCheckWhenRequestLimited && zone.PathAttributes[lookupPath] != nil && zone.PathAttributes[lookupPath].NotExpunged {
+				zone.PathAttributes[lookupPath].UpdateHeader(rw.Header())
+				processSupportedPreconditions429(rw, req, zone.PathAttributes[lookupPath].lastModifiedTime, zone.PathAttributes[lookupPath].eTag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
+			} else {
+				setNeverCacheHeader(rw.Header())
+				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Requests")
+			}
 		}
 		if zone.ConnectionLimits[clientIP].limitConf.YamlValid() {
 			zone.ConnectionLimits[clientIP].stopConnection()
@@ -231,5 +265,55 @@ func (zone *Zone) ZoneHostAllowed(host string) bool {
 			}
 		}
 		return false
+	}
+}
+
+func NewZonePathAttributes(lModTime time.Time, eTag string) *ZonePathAttributes {
+	return &ZonePathAttributes{
+		lastModifiedTime: lModTime,
+		eTag:             eTag,
+		NotExpunged:      true,
+	}
+}
+
+type ZonePathAttributes struct {
+	lastModifiedTime time.Time
+	eTag             string
+	contentLength    string
+	contentType      string
+	cacheControl     string
+	age              string
+	expire           string
+	NotExpunged      bool
+}
+
+func (zpa *ZonePathAttributes) Update(lModTime time.Time, eTag string, header http.Header) {
+	zpa.NotExpunged = true
+	zpa.lastModifiedTime = lModTime
+	zpa.eTag = eTag
+	zpa.contentLength = header.Get("Content-Length")
+	zpa.contentType = header.Get("Content-Type")
+	zpa.cacheControl = header.Get("Cache-Control")
+	zpa.age = header.Get("Age")
+	zpa.expire = header.Get("Expires")
+}
+
+func (zpa *ZonePathAttributes) UpdateHeader(header http.Header) {
+	if zpa.NotExpunged {
+		if zpa.contentLength != "" {
+			header.Set("Content-Length", zpa.contentLength)
+		}
+		if zpa.contentType != "" {
+			header.Set("Content-Type", zpa.contentType)
+		}
+		if zpa.cacheControl != "" {
+			header.Set("Cache-Control", zpa.cacheControl)
+		}
+		if zpa.age != "" {
+			header.Set("Age", zpa.age)
+		}
+		if zpa.expire != "" {
+			header.Set("Expires", zpa.expire)
+		}
 	}
 }

@@ -10,7 +10,15 @@ import (
 	"time"
 )
 
-func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
+func processSupportedPreconditions200(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
+	return processSupportedPreconditions(http.StatusOK, "", rw, req, modT, etag, noBypassModify, noBypassMatch)
+}
+
+func processSupportedPreconditions429(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
+	return processSupportedPreconditions(http.StatusTooManyRequests, "Too Many Requests", rw, req, modT, etag, noBypassModify, noBypassMatch)
+}
+
+func processSupportedPreconditions(statusCode int, statusMessage string, rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
 	theStrippedETag := getETagValue(etag)
 	if noBypassMatch && theStrippedETag != "" && req.Header.Get("If-None-Match") != "" {
 		etagVals := getETagValues(req.Header.Get("If-None-Match"))
@@ -68,7 +76,7 @@ func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, mo
 		}
 	}
 
-	return writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
+	return writeResponseHeaderCanWriteBody(2, req.Method, rw, statusCode, statusMessage)
 }
 
 func getValueForETagUsingAttributes(timeIn time.Time, sizeIn int64) string {
@@ -140,6 +148,7 @@ func writeResponseHeaderCanWriteBody(minLevel uint, method string, rw http.Respo
 
 func setNeverCacheHeader(header http.Header) {
 	header.Set("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate")
+	header.Set("Pragma", "no-cache")
 }
 
 func setExpiresHeader(header http.Header, expireTime time.Time) {

@@ -19,32 +19,33 @@ type ListenYaml struct {
 }
 
 func (ly ListenYaml) GetReadTimeout() time.Duration {
-	if ly.ReadTimeout.Seconds() < 15 {
-		return 15 * time.Second
+	if ly.ReadTimeout.Seconds() < 1 {
+		return 1 * time.Second
 	} else {
 		return ly.ReadTimeout
 	}
 }
 
 func (ly ListenYaml) GetWriteTimeout() time.Duration {
-	if ly.WriteTimeout.Hours() < 1 {
-		return 1 * time.Hour
+	if ly.WriteTimeout.Seconds() < 1 {
+		return 1 * time.Second
 	} else {
 		return ly.WriteTimeout
 	}
 }
 
 type ZoneYaml struct {
-	Name                                 string            `yaml:"name"`
-	Domains                              []string          `yaml:"domains"`
-	MaxAge                               uint              `yaml:"maxAge"`
-	PrivateCache                         bool              `yaml:"privateCache"`
-	NotModifiedResponseUsingLastModified bool              `yaml:"notModifiedResponseUsingLastModified"`
-	NotModifiedResponseUsingETags        bool              `yaml:"notModifiedResponseUsingETags"`
-	AccessLimit                          AccessLimitYaml   `yaml:"accessLimit"`
-	Limits                               LimitsYaml        `yaml:"limits"`
-	Backend                              string            `yaml:"backend"`
-	BackendSettings                      map[string]string `yaml:"backendSettings"`
+	Name                                  string            `yaml:"name"`
+	Domains                               []string          `yaml:"domains"`
+	MaxAge                                uint              `yaml:"maxAge"`
+	PrivateCache                          bool              `yaml:"privateCache"`
+	NotModifiedResponseUsingLastModified  bool              `yaml:"notModifiedResponseUsingLastModified"`
+	NotModifiedResponseUsingETags         bool              `yaml:"notModifiedResponseUsingETags"`
+	CanNotModifiedCheckWhenRequestLimited bool              `yaml:"canNotModifiedCheckWhenRequestLimited"`
+	AccessLimit                           AccessLimitYaml   `yaml:"accessLimit"`
+	Limits                                LimitsYaml        `yaml:"limits"`
+	Backend                               string            `yaml:"backend"`
+	BackendSettings                       map[string]string `yaml:"backendSettings"`
 }
 
 type AccessLimitYaml struct {
