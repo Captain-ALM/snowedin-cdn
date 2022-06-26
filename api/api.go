@@ -19,6 +19,7 @@ func New(cdnIn *cdn.CDN) *http.Server {
 		Handler:      router,
 		ReadTimeout:  cdnIn.Config.Listen.GetReadTimeout(),
 		WriteTimeout: cdnIn.Config.Listen.GetWriteTimeout(),
+		IdleTimeout:  cdnIn.Config.Listen.GetIdleTimeout(),
 	}
 	//LogLevel = cdnIn.Config.LogLevel
 	go runBackgroundHttp(s)

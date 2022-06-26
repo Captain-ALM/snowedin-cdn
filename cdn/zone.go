@@ -116,7 +116,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											}
 											rw.Header().Set("ETag", theETag)
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), "text/plain; charset=utf-8")
+											if zone.Config.DownloadResponse.OutputDisposition {
+												setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), "text/plain; charset=utf-8")
+											}
 											if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
 												logPrintln(4, "Send Start")
 												var theWriter io.Writer
@@ -173,7 +175,9 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											if fsSize > 0 {
 												theMimeType := zone.Backend.MimeType(lookupPath)
 												if theMimeType != "" {
-													setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), theMimeType)
+													if zone.Config.DownloadResponse.OutputDisposition {
+														setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), theMimeType)
+													}
 													rw.Header().Set("Content-Type", theMimeType)
 												}
 												if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {

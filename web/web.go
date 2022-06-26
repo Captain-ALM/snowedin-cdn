@@ -20,6 +20,9 @@ func New(cdnIn *cdn.CDN) *http.Server {
 	router.PathPrefix("/{zone}/").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		zoneHandlerFunc(rw, req, cdnIn)
 	})
+	if cdnIn.Config.Listen.Identify {
+		router.Use(headerMiddleware)
+	}
 	if cdnIn.Config.Listen.Web == "" {
 		log.Fatalf("[Http] Invalid Listening Address")
 	}
@@ -28,6 +31,7 @@ func New(cdnIn *cdn.CDN) *http.Server {
 		Handler:      router,
 		ReadTimeout:  cdnIn.Config.Listen.GetReadTimeout(),
 		WriteTimeout: cdnIn.Config.Listen.GetWriteTimeout(),
+		IdleTimeout:  cdnIn.Config.Listen.GetIdleTimeout(),
 	}
 	LogLevel = cdnIn.Config.LogLevel
 	go runBackgroundHttp(s)
@@ -96,4 +100,13 @@ func pathNotProvided(rw http.ResponseWriter, req *http.Request) {
 			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusMethodNotAllowed, "")
 		}
 	}
+}
+
+func headerMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "Clerie Gilbert")
+		w.Header().Set("X-Powered-By", "Love")
+		w.Header().Set("X-Friendly", "True")
+		next.ServeHTTP(w, r)
+	})
 }
