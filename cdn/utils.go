@@ -13,14 +13,14 @@ import (
 func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
 	if noBypassMatch && etag != "" && req.Header.Get("If-None-Match") != "" {
 		etagVals := getETagValues(req.Header.Get("If-None-Match"))
-		conditionFailed := true
+		conditionSuccess := false
 		for _, s := range etagVals {
 			if s == etag {
-				conditionFailed = false
+				conditionSuccess = true
 				break
 			}
 		}
-		if conditionFailed {
+		if conditionSuccess {
 			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotModified, "")
 			logPrintln(4, "Send Skipped")
 			return false
@@ -72,10 +72,12 @@ func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, mo
 
 func getValueForETagUsingAttributes(timeIn time.Time, sizeIn int64) string {
 	theHash := crypto.SHA1.New()
-	theValue := timeIn.String() + ":" + strconv.FormatInt(sizeIn, 10)
+	theValue := timeIn.Format(http.TimeFormat) + ":" + strconv.FormatInt(sizeIn, 10)
+	logPrintln(5, theValue)
 	theSum := theHash.Sum([]byte(theValue))
 	theHash.Reset()
 	if len(theSum) > 0 {
+		logPrintln(5, hex.EncodeToString(theSum))
 		return "\"" + hex.EncodeToString(theSum) + "\""
 	} else {
 		return "\"" + hex.EncodeToString([]byte(theValue)) + "\""

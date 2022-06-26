@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net/http"
 	"os"
 	pth "path"
 	"strconv"
@@ -200,12 +201,12 @@ func (b *BackendFilesystem) directStats(path string) (size int64, modified time.
 	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
 		if fstats.IsDir() {
 			if b.calculateETags {
-				b.setETag(path, "-1:"+fstats.ModTime().String(), false)
+				b.setETag(path, "-1:"+fstats.ModTime().Format(http.TimeFormat), false)
 			}
 			return -1, fstats.ModTime(), nil
 		} else {
 			if b.calculateETags {
-				b.setETag(path, strconv.FormatInt(fstats.Size(), 10)+":"+fstats.ModTime().String(), false)
+				b.setETag(path, strconv.FormatInt(fstats.Size(), 10)+":"+fstats.ModTime().Format(http.TimeFormat), false)
 			}
 			return fstats.Size(), fstats.ModTime(), nil
 		}
