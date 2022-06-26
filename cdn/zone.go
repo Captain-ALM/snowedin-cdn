@@ -37,8 +37,7 @@ type Zone struct {
 
 func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 	if zone.Backend == nil {
-		http.Error(rw, "Zone Backend Unavailable", http.StatusServiceUnavailable)
-		logPrintln(1, "503 Service Unavailable\nZone Backend Unavailable")
+		writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusServiceUnavailable, "Zone Backend Unavailable")
 	}
 
 	clientIP := realip.FromRequest(req)
@@ -73,33 +72,42 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 					zone.AccessLimits[lookupPath] = NewAccessLimit(zone.Config.AccessLimit)
 				}
 
-				if req.Method == http.MethodGet {
+				if req.Method == http.MethodGet || req.Method == http.MethodHead {
 
 					if zone.AccessLimits[lookupPath].Gone {
 						setNeverCacheHeader(rw.Header())
-						http.Error(rw, "Object Gone", http.StatusGone)
-						logPrintln(2, "410 Gone\nObject Gone")
+						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Gone")
 					} else {
 						if zone.AccessLimits[lookupPath].accessLimitReached() {
 							setNeverCacheHeader(rw.Header())
-							http.Error(rw, "Access Limit Reached", http.StatusForbidden)
-							logPrintln(2, "403 Forbidden\nAccess Limit Reached")
+							writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "Access Limit Reached")
 						} else {
 							if zone.AccessLimits[lookupPath].isExpired() {
 								setNeverCacheHeader(rw.Header())
-								http.Error(rw, "Object Expired", http.StatusGone)
-								logPrintln(2, "410 Gone\nObject Expired")
+								writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
 							} else {
 								fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
 								if err == nil {
+									theETag := zone.Backend.ETag(lookupPath)
+									if theETag == "" {
+										theETag = getValueForETagUsingAttributes(fsMod, fsSize)
+									}
 									if plistable {
 										list, err := zone.Backend.List(lookupPath)
 										if err == nil {
-											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+											rw.Header().Set("ETag", theETag)
 											setLastModifiedHeader(rw.Header(), fsMod)
+											if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
+												setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
+											} else {
+												setExpiresHeader(rw.Header(), zone.AccessLimits[lookupPath].ExpireTime)
+												if zone.Config.PrivateCache {
+													rw.Header().Set("Cache-Control", "private")
+												}
+											}
 											fsSize = int64(lengthOfStringSlice(list))
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											if processIfModSince(rw, req, fsMod, zone.Config.NotModifiedResponseUsingLastModified) {
+											if processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
 												logPrintln(4, "Send Start")
 												var theWriter io.Writer
 												if bwlim.YamlValid() {
@@ -127,10 +135,10 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											}
 										} else {
 											setNeverCacheHeader(rw.Header())
-											rw.WriteHeader(http.StatusForbidden)
-											logPrintln(2, "403 Forbidden")
+											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
 										}
 									} else {
+										rw.Header().Set("ETag", theETag)
 										setLastModifiedHeader(rw.Header(), fsMod)
 										if zone.AccessLimits[lookupPath].ExpireTime.IsZero() {
 											setCacheHeaderWithAge(rw.Header(), zone.Config.MaxAge, fsMod, zone.Config.PrivateCache)
@@ -147,7 +155,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 												if theMimeType != "" {
 													rw.Header().Set("Content-Type", theMimeType)
 												}
-												if processIfModSince(rw, req, fsMod, zone.Config.NotModifiedResponseUsingLastModified) {
+												if processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags) {
 													logPrintln(4, "Send Start")
 													var theWriter io.Writer
 													if bwlim.YamlValid() {
@@ -163,18 +171,16 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													}
 												}
 											} else {
-												processIfModSince(rw, req, fsMod, zone.Config.NotModifiedResponseUsingLastModified)
+												processSupportedPreconditions(rw, req, fsMod, theETag, zone.Config.NotModifiedResponseUsingLastModified, zone.Config.NotModifiedResponseUsingETags)
 											}
 										} else {
 											logHeaders(rw.Header())
-											rw.WriteHeader(http.StatusForbidden)
-											logPrintln(2, "403 Forbidden")
+											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
 										}
 									}
 								} else {
 									setNeverCacheHeader(rw.Header())
-									http.Error(rw, "Stat Failure: "+err.Error(), http.StatusInternalServerError)
-									logPrintln(1, "500 Internal Server Error\nStat Failure: "+err.Error())
+									writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Stat Failure: "+err.Error())
 								}
 							}
 						}
@@ -184,15 +190,12 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 					err := zone.Backend.Purge(lookupPath)
 					setNeverCacheHeader(rw.Header())
 					if err == nil {
-						rw.WriteHeader(http.StatusOK)
-						logPrintln(2, "200 OK")
+						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
 					} else {
-						http.Error(rw, "Purge Error: "+err.Error(), http.StatusInternalServerError)
-						logPrintln(1, "500 Internal Server Error\nPurge Error: "+err.Error())
+						writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Purge Error: "+err.Error())
 					}
 				} else {
-					http.Error(rw, "Forbidden Method", http.StatusForbidden)
-					logPrintln(2, "403 Forbidden\nForbidden Method")
+					writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusForbidden, "Forbidden Method")
 				}
 
 			} else {
@@ -200,21 +203,18 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 					zone.AccessLimits[lookupPath] = nil
 				}
 				setNeverCacheHeader(rw.Header())
-				http.Error(rw, "Object Not Found", http.StatusNotFound)
-				logPrintln(2, "404 Not Found\nObject Not Found")
+				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotFound, "Object Not Found")
 			}
 		} else {
 			setNeverCacheHeader(rw.Header())
-			http.Error(rw, "Too Many Requests", http.StatusTooManyRequests)
-			logPrintln(2, "429 Too Many Requests\nToo Many Requests")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Requests")
 		}
 		if zone.ConnectionLimits[clientIP].limitConf.YamlValid() {
 			zone.ConnectionLimits[clientIP].stopConnection()
 		}
 	} else {
 		setNeverCacheHeader(rw.Header())
-		http.Error(rw, "Too Many Connections", http.StatusTooManyRequests)
-		logPrintln(2, "429 Too Many Requests\nToo Many Connections")
+		writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Connections")
 	}
 }
 

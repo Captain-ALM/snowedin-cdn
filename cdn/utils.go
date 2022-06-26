@@ -1,6 +1,8 @@
 package cdn
 
 import (
+	"crypto"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"strconv"
@@ -8,45 +10,131 @@ import (
 	"time"
 )
 
-func processIfModSince(rw http.ResponseWriter, req *http.Request, modT time.Time, noBypass bool) bool {
-	if noBypass && !modT.IsZero() && req.Header.Get("If-Modified-Since") != "" {
+func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
+	if noBypassMatch && etag != "" && req.Header.Get("If-None-Match") != "" {
+		etagVals := getETagValues(req.Header.Get("If-None-Match"))
+		conditionFailed := true
+		for _, s := range etagVals {
+			if s == etag {
+				conditionFailed = false
+				break
+			}
+		}
+		if conditionFailed {
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotModified, "")
+			logPrintln(4, "Send Skipped")
+			return false
+		}
+	}
+
+	if noBypassMatch && etag != "" && req.Header.Get("If-Match") != "" {
+		etagVals := getETagValues(req.Header.Get("If-Match"))
+		conditionFailed := true
+		for _, s := range etagVals {
+			if s == etag {
+				conditionFailed = false
+				break
+			}
+		}
+		if conditionFailed {
+			switchToNonCachingHeaders(rw.Header())
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPreconditionFailed, "")
+			logPrintln(4, "Send Condition Not Satisfied")
+			return false
+		}
+	}
+
+	if noBypassModify && !modT.IsZero() && req.Header.Get("If-Modified-Since") != "" {
 		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Modified-Since"))
 		if err == nil {
 			if modT.Before(parse) || strings.EqualFold(modT.Format(http.TimeFormat), req.Header.Get("If-Modified-Since")) {
-				logHeaders(rw.Header())
-				rw.WriteHeader(http.StatusNotModified)
-				logPrintln(2, "304 Not Modified")
+				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotModified, "")
 				logPrintln(4, "Send Skipped")
 				return false
 			}
 		}
 	}
-	if noBypass && !modT.IsZero() && req.Header.Get("If-Unmodified-Since") != "" {
+
+	if noBypassModify && !modT.IsZero() && req.Header.Get("If-Unmodified-Since") != "" {
 		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Unmodified-Since"))
 		if err == nil {
 			if modT.After(parse) {
-				setNeverCacheHeader(rw.Header())
-				if rw.Header().Get("Last-Modified") != "" {
-					rw.Header().Del("Last-Modified")
-				}
-				if rw.Header().Get("Age") != "" {
-					rw.Header().Del("Age")
-				}
-				if rw.Header().Get("Expires") != "" {
-					rw.Header().Del("Expires")
-				}
-				logHeaders(rw.Header())
-				rw.WriteHeader(http.StatusPreconditionFailed)
-				logPrintln(2, "412 Precondition Failed")
+				switchToNonCachingHeaders(rw.Header())
+				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPreconditionFailed, "")
 				logPrintln(4, "Send Condition Not Satisfied")
 				return false
 			}
 		}
 	}
+
+	return writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
+}
+
+func getValueForETagUsingAttributes(timeIn time.Time, sizeIn int64) string {
+	theHash := crypto.SHA1.New()
+	theValue := timeIn.String() + ":" + strconv.FormatInt(sizeIn, 10)
+	theSum := theHash.Sum([]byte(theValue))
+	theHash.Reset()
+	if len(theSum) > 0 {
+		return "\"" + hex.EncodeToString(theSum) + "\""
+	} else {
+		return "\"" + hex.EncodeToString([]byte(theValue)) + "\""
+	}
+}
+
+func getETagValues(stringIn string) []string {
+	if strings.ContainsAny(stringIn, ",") {
+		seperated := strings.Split(stringIn, ",")
+		toReturn := make([]string, len(seperated))
+		pos := 0
+		for _, s := range seperated {
+			cETag := getETagValue(s)
+			if cETag != "" {
+				toReturn[pos] = cETag
+				pos += 1
+			}
+		}
+		if pos == 0 {
+			return nil
+		}
+		return toReturn[:pos]
+	}
+	toReturn := []string{getETagValue(stringIn)}
+	if toReturn[0] == "" {
+		return nil
+	}
+	return toReturn
+}
+
+func getETagValue(stringIn string) string {
+	startIndex := strings.IndexAny(stringIn, "\"") + 1
+	endIndex := strings.LastIndexAny(stringIn, "\"")
+	if endIndex > startIndex {
+		return stringIn[startIndex:endIndex]
+	}
+	return ""
+}
+
+func writeResponseHeaderCanWriteBody(minLevel uint, method string, rw http.ResponseWriter, statusCode int, message string) bool {
+	hasBody := method != http.MethodHead && method != http.MethodOptions
+	if hasBody && message != "" {
+		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		rw.Header().Set("X-Content-Type-Options", "nosniff")
+		rw.Header().Set("Content-Length", strconv.Itoa(len(message)+2))
+	}
 	logHeaders(rw.Header())
-	rw.WriteHeader(http.StatusOK)
-	logPrintln(2, "200 OK")
-	return true
+	rw.WriteHeader(statusCode)
+	if hasBody {
+		if message != "" {
+			_, _ = rw.Write([]byte(message + "\r\n"))
+			logPrintln(minLevel, strconv.Itoa(statusCode)+" "+http.StatusText(statusCode)+" : "+message)
+			return false
+		}
+		logPrintln(minLevel, strconv.Itoa(statusCode)+" "+http.StatusText(statusCode))
+		return true
+	}
+	logPrintln(minLevel, strconv.Itoa(statusCode)+" "+http.StatusText(statusCode))
+	return false
 }
 
 func setNeverCacheHeader(header http.Header) {
@@ -58,7 +146,9 @@ func setExpiresHeader(header http.Header, expireTime time.Time) {
 }
 
 func setLastModifiedHeader(header http.Header, modTime time.Time) {
-	header.Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
+	if !modTime.IsZero() {
+		header.Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
+	}
 }
 
 func setCacheHeaderWithAge(header http.Header, maxAge uint, modifiedTime time.Time, isPrivate bool) {
@@ -72,6 +162,22 @@ func setCacheHeaderWithAge(header http.Header, maxAge uint, modifiedTime time.Ti
 			checkerSecondsBetween *= -1
 		}
 		header.Set("Age", strconv.FormatUint(uint64(checkerSecondsBetween)%uint64(maxAge), 10))
+	}
+}
+
+func switchToNonCachingHeaders(header http.Header) {
+	setNeverCacheHeader(header)
+	if header.Get("Last-Modified") != "" {
+		header.Del("Last-Modified")
+	}
+	if header.Get("Age") != "" {
+		header.Del("Age")
+	}
+	if header.Get("Expires") != "" {
+		header.Del("Expires")
+	}
+	if header.Get("ETag") != "" {
+		header.Del("ETag")
 	}
 }
 

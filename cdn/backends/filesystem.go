@@ -1,6 +1,8 @@
 package backends
 
 import (
+	"crypto"
+	"encoding/hex"
 	"errors"
 	"io"
 	"mime"
@@ -51,6 +53,13 @@ func NewBackendFilesystem(confMap map[string]string) *BackendFilesystem {
 	if confMap["directoryModifiedTimeCheck"] != "" {
 		dmtc, _ = strconv.ParseBool(confMap["directoryModifiedTimeCheck"])
 	}
+	var etagstore map[string]string = nil
+	if confMap["calculateETags"] != "" {
+		calcETags, _ := strconv.ParseBool(confMap["calculateETags"])
+		if calcETags {
+			etagstore = make(map[string]string)
+		}
+	}
 	return &BackendFilesystem{
 		directoryPath:              directory,
 		cachedHeaderBytes:          chb,
@@ -59,7 +68,9 @@ func NewBackendFilesystem(confMap map[string]string) *BackendFilesystem {
 		mimeTypeByExtension:        mtbe,
 		directoryListing:           dirl,
 		directoryModifiedTimeCheck: dmtc,
+		calculateETags:             etagstore != nil,
 		fileObjects:                make(map[string]*FileObject),
+		eTags:                      etagstore,
 	}
 }
 
@@ -71,8 +82,22 @@ type BackendFilesystem struct {
 	mimeTypeByExtension        bool
 	directoryListing           bool
 	directoryModifiedTimeCheck bool
+	calculateETags             bool
 	fileObjects                map[string]*FileObject
+	eTags                      map[string]string
 	syncer                     sync.Mutex
+}
+
+func (b *BackendFilesystem) ETag(path string) (eTag string) {
+	if b.calculateETags {
+		b.syncer.Lock()
+		defer b.syncer.Unlock()
+		if _, ok := b.eTags[path]; !ok {
+			_, _, _ = b.directStats(path)
+		}
+		return b.eTags[path]
+	}
+	return ""
 }
 
 func (b *BackendFilesystem) MimeType(path string) (mimetype string) {
@@ -122,6 +147,21 @@ func (b *BackendFilesystem) Stats(path string) (size int64, modified time.Time, 
 	}
 }
 
+func (b *BackendFilesystem) setETag(path string, tagValue string, replaceExisting bool) {
+	b.syncer.Lock()
+	if replaceExisting || b.eTags[path] == "" {
+		theHash := crypto.SHA1.New()
+		theSum := theHash.Sum([]byte(tagValue))
+		theHash.Reset()
+		if len(theSum) > 0 {
+			b.eTags[path] = "\"" + hex.EncodeToString(theSum) + "\""
+		} else {
+			b.eTags[path] = "\"" + hex.EncodeToString([]byte(tagValue)) + "\""
+		}
+	}
+	b.syncer.Unlock()
+}
+
 func (b *BackendFilesystem) getFileObject(path string) (*FileObject, error) {
 	b.syncer.Lock()
 	defer b.syncer.Unlock()
@@ -159,8 +199,14 @@ func (b *BackendFilesystem) getFileObject(path string) (*FileObject, error) {
 func (b *BackendFilesystem) directStats(path string) (size int64, modified time.Time, err error) {
 	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
 		if fstats.IsDir() {
+			if b.calculateETags {
+				b.setETag(path, "-1:"+fstats.ModTime().String(), false)
+			}
 			return -1, fstats.ModTime(), nil
 		} else {
+			if b.calculateETags {
+				b.setETag(path, strconv.FormatInt(fstats.Size(), 10)+":"+fstats.ModTime().String(), false)
+			}
 			return fstats.Size(), fstats.ModTime(), nil
 		}
 	} else {
@@ -172,6 +218,11 @@ func (b *BackendFilesystem) Purge(path string) (err error) {
 	b.syncer.Lock()
 	if _, ok := b.fileObjects[path]; ok {
 		b.fileObjects[path] = nil
+	}
+	if b.calculateETags {
+		if _, ok := b.eTags[path]; ok {
+			b.eTags[path] = ""
+		}
 	}
 	b.syncer.Unlock()
 	return nil

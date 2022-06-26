@@ -36,7 +36,7 @@ func New(cdnIn *cdn.CDN) *http.Server {
 
 func zoneHandlerFunc(rw http.ResponseWriter, req *http.Request, cdnIn *cdn.CDN) {
 	logRequest(req)
-	if req.Method == http.MethodGet || req.Method == http.MethodDelete {
+	if req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodDelete {
 		vars := mux.Vars(req)
 		var otherZone *cdn.Zone
 		var targetZone *cdn.Zone
@@ -54,55 +54,46 @@ func zoneHandlerFunc(rw http.ResponseWriter, req *http.Request, cdnIn *cdn.CDN) 
 			}
 		}
 		if targetZone == nil && otherZone == nil {
-			http.Error(rw, "Zone Not Found", http.StatusNotFound)
-			logPrintln(2, "404 Not Found\nZone Not Found")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotFound, "Zone Not Found")
 			return
 		} else if targetZone == nil && otherZone != nil {
 			targetZone = otherZone
 		}
 		targetZone.ZoneHandleRequest(rw, req)
 	} else {
-		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodDelete)
+		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodHead+", "+http.MethodDelete)
 		if req.Method == http.MethodOptions {
-			rw.WriteHeader(http.StatusOK)
-			logPrintln(2, "200 OK")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
 		} else {
-			rw.WriteHeader(http.StatusMethodNotAllowed)
-			logPrintln(2, "405 Method Not Allowed")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusMethodNotAllowed, "")
 		}
 	}
 }
 
 func zoneNotProvided(rw http.ResponseWriter, req *http.Request) {
 	logRequest(req)
-	if req.Method == http.MethodGet {
-		http.Error(rw, "Zone Not Provided", http.StatusNotFound)
-		logPrintln(1, "404 Not Found\nZone Not Provided")
+	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+		writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusNotFound, "Zone Not Provided")
 	} else {
-		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet)
+		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodHead)
 		if req.Method == http.MethodOptions {
-			rw.WriteHeader(http.StatusOK)
-			logPrintln(2, "200 OK")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
 		} else {
-			rw.WriteHeader(http.StatusMethodNotAllowed)
-			logPrintln(2, "405 Method Not Allowed")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusMethodNotAllowed, "")
 		}
 	}
 }
 
 func pathNotProvided(rw http.ResponseWriter, req *http.Request) {
 	logRequest(req)
-	if req.Method == http.MethodGet {
-		http.Error(rw, "Path Not Provided", http.StatusNotFound)
-		logPrintln(1, "404 Not Found\nPath Not Provided")
+	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+		writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusNotFound, "Path Not Provided")
 	} else {
-		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet)
+		rw.Header().Set("Allow", http.MethodOptions+", "+http.MethodGet+", "+http.MethodHead)
 		if req.Method == http.MethodOptions {
-			rw.WriteHeader(http.StatusOK)
-			logPrintln(2, "200 OK")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
 		} else {
-			rw.WriteHeader(http.StatusMethodNotAllowed)
-			logPrintln(2, "405 Method Not Allowed")
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusMethodNotAllowed, "")
 		}
 	}
 }

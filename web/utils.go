@@ -4,6 +4,7 @@ import (
 	"github.com/tomasen/realip"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 func runBackgroundHttp(s *http.Server) {
@@ -15,6 +16,27 @@ func runBackgroundHttp(s *http.Server) {
 			log.Fatalf("[Http] Error trying to host the http server: %s\n", err.Error())
 		}
 	}
+}
+
+func writeResponseHeaderCanWriteBody(minLevel uint, method string, rw http.ResponseWriter, statusCode int, message string) bool {
+	hasBody := method != http.MethodHead && method != http.MethodOptions
+	if hasBody && message != "" {
+		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		rw.Header().Set("X-Content-Type-Options", "nosniff")
+		rw.Header().Set("Content-Length", strconv.Itoa(len(message)+2))
+	}
+	rw.WriteHeader(statusCode)
+	if hasBody {
+		if message != "" {
+			_, _ = rw.Write([]byte(message + "\r\n"))
+			logPrintln(minLevel, strconv.Itoa(statusCode)+" "+http.StatusText(statusCode)+" : "+message)
+			return false
+		}
+		logPrintln(minLevel, strconv.Itoa(statusCode)+" "+http.StatusText(statusCode))
+		return true
+	}
+	logPrintln(minLevel, strconv.Itoa(statusCode)+" "+http.StatusText(statusCode))
+	return false
 }
 
 func logRequest(req *http.Request) {

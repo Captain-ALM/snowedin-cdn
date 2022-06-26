@@ -9,6 +9,7 @@ import (
 type Backend interface {
 	WriteData(path string, rw io.Writer) (err error)
 	MimeType(path string) (mimetype string)
+	ETag(path string) (eTag string)
 	Stats(path string) (size int64, modified time.Time, err error)
 	Purge(path string) (err error)
 	Exists(path string) (exists bool, listable bool)
