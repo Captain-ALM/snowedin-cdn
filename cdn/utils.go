@@ -11,11 +11,12 @@ import (
 )
 
 func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
-	if noBypassMatch && etag != "" && req.Header.Get("If-None-Match") != "" {
+	theStrippedETag := getETagValue(etag)
+	if noBypassMatch && theStrippedETag != "" && req.Header.Get("If-None-Match") != "" {
 		etagVals := getETagValues(req.Header.Get("If-None-Match"))
 		conditionSuccess := false
 		for _, s := range etagVals {
-			if s == etag {
+			if s == theStrippedETag {
 				conditionSuccess = true
 				break
 			}
@@ -27,11 +28,11 @@ func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, mo
 		}
 	}
 
-	if noBypassMatch && etag != "" && req.Header.Get("If-Match") != "" {
+	if noBypassMatch && theStrippedETag != "" && req.Header.Get("If-Match") != "" {
 		etagVals := getETagValues(req.Header.Get("If-Match"))
 		conditionFailed := true
 		for _, s := range etagVals {
-			if s == etag {
+			if s == theStrippedETag {
 				conditionFailed = false
 				break
 			}
@@ -73,11 +74,9 @@ func processSupportedPreconditions(rw http.ResponseWriter, req *http.Request, mo
 func getValueForETagUsingAttributes(timeIn time.Time, sizeIn int64) string {
 	theHash := crypto.SHA1.New()
 	theValue := timeIn.Format(http.TimeFormat) + ":" + strconv.FormatInt(sizeIn, 10)
-	logPrintln(5, theValue)
 	theSum := theHash.Sum([]byte(theValue))
 	theHash.Reset()
 	if len(theSum) > 0 {
-		logPrintln(5, hex.EncodeToString(theSum))
 		return "\"" + hex.EncodeToString(theSum) + "\""
 	} else {
 		return "\"" + hex.EncodeToString([]byte(theValue)) + "\""
