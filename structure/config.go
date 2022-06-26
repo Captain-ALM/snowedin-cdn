@@ -35,13 +35,14 @@ func (ly ListenYaml) GetWriteTimeout() time.Duration {
 }
 
 type ZoneYaml struct {
-	Name            string            `yaml:"name"`
-	Domains         []string          `yaml:"domains"`
-	CacheResponse   CacheSettingsYaml `yaml:"cacheResponse"`
-	AccessLimit     AccessLimitYaml   `yaml:"accessLimit"`
-	Limits          LimitsYaml        `yaml:"limits"`
-	Backend         string            `yaml:"backend"`
-	BackendSettings map[string]string `yaml:"backendSettings"`
+	Name             string               `yaml:"name"`
+	Domains          []string             `yaml:"domains"`
+	CacheResponse    CacheSettingsYaml    `yaml:"cacheResponse"`
+	DownloadResponse DownloadSettingsYaml `yaml:"downloadResponse"`
+	AccessLimit      AccessLimitYaml      `yaml:"accessLimit"`
+	Limits           LimitsYaml           `yaml:"limits"`
+	Backend          string               `yaml:"backend"`
+	BackendSettings  map[string]string    `yaml:"backendSettings"`
 }
 
 type AccessLimitYaml struct {
@@ -56,6 +57,12 @@ type CacheSettingsYaml struct {
 	NotModifiedResponseUsingLastModified bool `yaml:"notModifiedUsingLastModified"`
 	NotModifiedResponseUsingETags        bool `yaml:"notModifiedUsingETags"`
 	RequestLimitedCacheCheck             bool `yaml:"requestLimitedCacheCheck"`
+}
+
+type DownloadSettingsYaml struct {
+	OutputDisposition     bool `yaml:"outputDisposition"`
+	OutputFilename        bool `yaml:"outputFilename"`
+	SetExtensionIfMissing bool `yaml:"setExtensionIfMissing"`
 }
 
 type LimitsYaml struct {

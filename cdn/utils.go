@@ -4,7 +4,9 @@ import (
 	"crypto"
 	"encoding/hex"
 	"log"
+	"mime"
 	"net/http"
+	"snow.mrmelon54.xyz/snowedin/structure"
 	"strconv"
 	"strings"
 	"time"
@@ -188,6 +190,30 @@ func switchToNonCachingHeaders(header http.Header) {
 	}
 	if header.Get("ETag") != "" {
 		header.Del("ETag")
+	}
+}
+
+func getFilenameFromPath(pathIn string) string {
+	lastSlashIndex := strings.LastIndexAny(pathIn, "/")
+	if lastSlashIndex < 0 {
+		return pathIn
+	} else {
+		return pathIn[lastSlashIndex+1:]
+	}
+}
+
+func setDownloadHeaders(header http.Header, config structure.DownloadSettingsYaml, filename string, mimeType string) {
+	if config.OutputFilename {
+		theFilename := filename
+		if theFilename == "" {
+			theFilename = "download"
+		}
+		if exts, err := mime.ExtensionsByType(mimeType); config.SetExtensionIfMissing && !strings.Contains(theFilename, ".") && err == nil && len(exts) > 0 {
+			theFilename += exts[0]
+		}
+		header.Set("Content-Disposition", "attachment; filename=\""+theFilename+"\"")
+	} else {
+		header.Set("Content-Disposition", "attachment")
 	}
 }
 
