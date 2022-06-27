@@ -93,7 +93,16 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 						} else {
 							if zLAccessLimts.isExpired() {
 								setNeverCacheHeader(rw.Header())
-								writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
+								if zone.Config.AccessLimit.PurgeExpired {
+									err := zone.Backend.Purge(lookupPath)
+									if err == nil {
+										writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
+									} else {
+										writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Purge Error: "+err.Error())
+									}
+								} else {
+									writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
+								}
 							} else {
 								fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
 								if err == nil {
