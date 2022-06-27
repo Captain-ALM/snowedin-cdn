@@ -55,11 +55,12 @@ func NewRequestLimit(conf structure.LimitRequestsYaml) *RequestLimit {
 		expireTime:        time.Now().Add(conf.RequestRateInterval),
 		requestsRemaining: conf.MaxRequests,
 		limitConf:         conf,
+		mu:                &sync.Mutex{},
 	}
 }
 
 type RequestLimit struct {
-	mu                sync.Mutex
+	mu                *sync.Mutex
 	expireTime        time.Time
 	requestsRemaining uint
 	limitConf         structure.LimitRequestsYaml
@@ -85,11 +86,12 @@ func NewConnectionLimit(conf structure.LimitConnectionYaml) *ConnectionLimit {
 	return &ConnectionLimit{
 		connectionsRemaining: conf.MaxConnections,
 		limitConf:            conf,
+		mu:                   &sync.Mutex{},
 	}
 }
 
 type ConnectionLimit struct {
-	mu                   sync.Mutex
+	mu                   *sync.Mutex
 	connectionsRemaining uint
 	limitConf            structure.LimitConnectionYaml
 }

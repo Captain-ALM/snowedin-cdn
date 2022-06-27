@@ -72,6 +72,7 @@ func NewBackendFilesystem(confMap map[string]string) *BackendFilesystem {
 		calculateETags:             etagstore != nil,
 		fileObjects:                make(map[string]*FileObject),
 		eTags:                      etagstore,
+		syncer:                     &sync.Mutex{},
 	}
 }
 
@@ -86,7 +87,7 @@ type BackendFilesystem struct {
 	calculateETags             bool
 	fileObjects                map[string]*FileObject
 	eTags                      map[string]string
-	syncer                     sync.Mutex
+	syncer                     *sync.Mutex
 }
 
 func (b *BackendFilesystem) ETag(path string) (eTag string) {
@@ -118,22 +119,39 @@ func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
 		if fobj.size < 0 {
 			return errors.New("object not writeable")
 		}
-		var theWriter io.Writer
-		var theReader io.ReadCloser
-		if fobj.cacheWriteIndex >= len(fobj.cache) {
-			theWriter = rw
-			theReader = NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
+		if len(fobj.cache) > 0 {
+			if fobj.doCache() {
+				theReader, err := os.Open(pth.Join(b.directoryPath, path))
+				if err != nil {
+					return err
+				}
+				defer func() {
+					theReader.Close()
+					fobj.doneCaching()
+				}()
+				_, err = io.Copy(io.MultiWriter(rw, fobj), theReader)
+				if err != nil {
+					return err
+				}
+			} else {
+				fobj.doCacheWait()
+				theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
+				defer theReader.Close()
+				_, err = io.Copy(rw, theReader)
+				if err != nil {
+					return err
+				}
+			}
 		} else {
-			theWriter = io.MultiWriter(rw, fobj)
-			theReader, err = os.Open(pth.Join(b.directoryPath, path))
+			theReader, err := os.Open(pth.Join(b.directoryPath, path))
 			if err != nil {
 				return err
 			}
-		}
-		defer theReader.Close()
-		_, err = io.Copy(theWriter, theReader)
-		if err != nil {
-			return err
+			defer theReader.Close()
+			_, err = io.Copy(rw, theReader)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -262,9 +280,11 @@ func (b *BackendFilesystem) List(path string) (entries []string, err error) {
 func NewFileObject(cachedSize uint, actualSize int64, modifiedTime time.Time) *FileObject {
 	return &FileObject{
 		cache:           make([]byte, cachedSize),
-		cacheWriteIndex: 0,
+		cacheWriteIndex: -1,
 		modifyTime:      modifiedTime,
 		size:            actualSize,
+		locker:          &sync.Mutex{},
+		waiter:          &sync.WaitGroup{},
 	}
 }
 
@@ -273,6 +293,28 @@ type FileObject struct {
 	cacheWriteIndex int
 	modifyTime      time.Time
 	size            int64
+	locker          *sync.Mutex
+	waiter          *sync.WaitGroup
+}
+
+func (fobj *FileObject) doCache() bool {
+	fobj.locker.Lock()
+	defer fobj.locker.Unlock()
+	if fobj.cacheWriteIndex < 0 {
+		fobj.cacheWriteIndex = 0
+		fobj.waiter.Add(1)
+		return true
+	} else {
+		return false
+	}
+}
+
+func (fobj *FileObject) doCacheWait() {
+	fobj.waiter.Wait()
+}
+
+func (fobj *FileObject) doneCaching() {
+	fobj.waiter.Done()
 }
 
 func (fobj *FileObject) Write(p []byte) (n int, err error) {
