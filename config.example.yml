@@ -38,11 +38,11 @@ zones: #An array of zones
           bytes: 65536 #The amount of bytes to send per burst, 0 to disable
     backend: 'filesystem' #The name of the backend to use
     backendSettings: #A set of fields with the settings specific to the backend, in this case for the filesystem backend
-      - directoryPath: "" #The path of the root directory, if blank or invalid, the current working directory is used instead
-        cachedHeaderBytes: 0 #The number of header (starting) bytes to cache in memory for each file object, 0 to disable
-        existsCheckCanFileOpen: false #Use an attempt to open a file object as part of the existence check
-        watchModified: false #If file objects should have stat used on every access
-        mimeTypeByExtension: false #If to output the mimetype of the file object using its path extension, default true
-        listDirectories: false #Enable listing directory objects
-        directoryModifiedTimeCheck: false #Enable getting the modified time for directory objects when using stat
-        calculateETags: false #Enable calculating ETags
+      directoryPath: "" #The path of the root directory, if blank or invalid, the current working directory is used instead
+      cachedHeaderBytes: 0 #The number of header (starting) bytes to cache in memory for each file object, 0 to disable
+      existsCheckCanFileOpen: false #Use an attempt to open a file object as part of the existence check
+      watchModified: false #If file objects should have stat used on every access
+      mimeTypeByExtension: false #If to output the mimetype of the file object using its path extension, default true
+      listDirectories: false #Enable listing directory objects
+      directoryModifiedTimeCheck: false #Enable getting the modified time for directory objects when using stat
+      calculateETags: false #Enable calculating ETags
