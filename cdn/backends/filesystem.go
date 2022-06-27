@@ -111,6 +111,74 @@ func (b *BackendFilesystem) MimeType(path string) (mimetype string) {
 	}
 }
 
+func (b *BackendFilesystem) WriteDataRange(path string, rw io.Writer, index int64, length int64) (err error) {
+	fobj, err := b.getFileObject(path)
+	if fobj == nil {
+		return err
+	} else {
+		if fobj.size < 0 {
+			return errors.New("object not writeable")
+		}
+		if len(fobj.cache) > 0 {
+			if fobj.doCache() {
+				theFile, err := os.Open(pth.Join(b.directoryPath, path))
+				if err != nil {
+					return err
+				}
+				defer func() {
+					theFile.Close()
+					fobj.doneCaching()
+				}()
+				_, err = io.Copy(fobj, io.LimitReader(theFile, int64(len(fobj.cache))))
+				if err != nil {
+					return err
+				}
+				theReader := &FileObjectReader{
+					filePath:       pth.Join(b.directoryPath, path),
+					fileObject:     fobj,
+					cacheReadIndex: 0,
+					filePointer:    theFile,
+				}
+				_, err = theReader.Seek(index, 0)
+				if err != nil {
+					return err
+				}
+				_, err = io.Copy(rw, io.LimitReader(theReader, length))
+				if err != nil {
+					return err
+				}
+			} else {
+				fobj.doCacheWait()
+				theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
+				defer theReader.Close()
+				_, err = theReader.Seek(index, 0)
+				if err != nil {
+					return err
+				}
+				_, err = io.Copy(rw, io.LimitReader(theReader, length))
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			theReader, err := os.Open(pth.Join(b.directoryPath, path))
+			if err != nil {
+				return err
+			}
+			defer theReader.Close()
+			_, err = theReader.Seek(index, 0)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(rw, io.LimitReader(theReader, length))
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
 	fobj, err := b.getFileObject(path)
 	if fobj == nil {
@@ -343,6 +411,34 @@ type FileObjectReader struct {
 	fileObject     *FileObject
 	cacheReadIndex int64
 	filePointer    *os.File
+}
+
+func (fobjr *FileObjectReader) Seek(offset int64, whence int) (int64, error) {
+	if whence == 0 {
+		if offset >= 0 && fobjr.cacheReadIndex+offset < fobjr.fileObject.size {
+			fobjr.cacheReadIndex = offset
+		} else {
+			return fobjr.cacheReadIndex, errors.New("seek index out of range")
+		}
+	} else if whence == 1 {
+		if fobjr.cacheReadIndex+offset < 0 || fobjr.cacheReadIndex+offset >= fobjr.fileObject.size {
+			return fobjr.cacheReadIndex, errors.New("seek index out of range")
+		} else {
+			fobjr.cacheReadIndex += offset
+		}
+	} else if whence == 2 {
+		if fobjr.fileObject.size+offset < 0 || fobjr.fileObject.size+offset >= fobjr.fileObject.size {
+			return fobjr.cacheReadIndex, errors.New("seek index out of range")
+		} else {
+			fobjr.cacheReadIndex = fobjr.fileObject.size + offset
+		}
+	} else {
+		return fobjr.cacheReadIndex, errors.New("invalid seek whence")
+	}
+	if fobjr.filePointer != nil {
+		return fobjr.filePointer.Seek(offset, whence)
+	}
+	return fobjr.cacheReadIndex, nil
 }
 
 func (fobjr *FileObjectReader) Close() error {
