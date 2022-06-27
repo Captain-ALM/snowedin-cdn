@@ -119,52 +119,32 @@ func (b *BackendFilesystem) WriteDataRange(path string, rw io.Writer, index int6
 		if fobj.size < 0 {
 			return errors.New("object not writeable")
 		}
-		if len(fobj.cache) > 0 {
-			if fobj.doCache() {
-				theFile, err := os.Open(pth.Join(b.directoryPath, path))
-				if err != nil {
-					return err
-				}
-				defer func() {
-					theFile.Close()
-					fobj.doneCaching()
-				}()
-				_, err = io.Copy(fobj, io.LimitReader(theFile, int64(len(fobj.cache))))
-				if err != nil {
-					return err
-				}
-				theReader := &FileObjectReader{
-					filePath:       pth.Join(b.directoryPath, path),
-					fileObject:     fobj,
-					cacheReadIndex: 0,
-					filePointer:    theFile,
-				}
-				_, err = theReader.Seek(index, 0)
-				if err != nil {
-					return err
-				}
-				_, err = io.Copy(rw, io.LimitReader(theReader, length))
-				if err != nil {
-					return err
-				}
-			} else {
-				fobj.doCacheWait()
-				theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
-				defer theReader.Close()
-				_, err = theReader.Seek(index, 0)
-				if err != nil {
-					return err
-				}
-				_, err = io.Copy(rw, io.LimitReader(theReader, length))
-				if err != nil {
-					return err
-				}
-			}
-		} else {
-			theReader, err := os.Open(pth.Join(b.directoryPath, path))
+		if len(fobj.cache) > 0 && fobj.doCache() {
+			theFile, err := os.Open(pth.Join(b.directoryPath, path))
 			if err != nil {
 				return err
 			}
+			defer theFile.Close()
+			_, err = io.Copy(fobj, io.LimitReader(theFile, int64(len(fobj.cache))))
+			if err != nil {
+				return err
+			}
+			theReader := &FileObjectReader{
+				filePath:       pth.Join(b.directoryPath, path),
+				fileObject:     fobj,
+				cacheReadIndex: 0,
+				filePointer:    theFile,
+			}
+			_, err = theReader.Seek(index, 0)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(rw, io.LimitReader(theReader, length))
+			if err != nil {
+				return err
+			}
+		} else {
+			theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
 			defer theReader.Close()
 			_, err = theReader.Seek(index, 0)
 			if err != nil {
@@ -187,34 +167,18 @@ func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
 		if fobj.size < 0 {
 			return errors.New("object not writeable")
 		}
-		if len(fobj.cache) > 0 {
-			if fobj.doCache() {
-				theReader, err := os.Open(pth.Join(b.directoryPath, path))
-				if err != nil {
-					return err
-				}
-				defer func() {
-					theReader.Close()
-					fobj.doneCaching()
-				}()
-				_, err = io.Copy(io.MultiWriter(rw, fobj), theReader)
-				if err != nil {
-					return err
-				}
-			} else {
-				fobj.doCacheWait()
-				theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
-				defer theReader.Close()
-				_, err = io.Copy(rw, theReader)
-				if err != nil {
-					return err
-				}
-			}
-		} else {
+		if len(fobj.cache) > 0 && fobj.doCache() {
 			theReader, err := os.Open(pth.Join(b.directoryPath, path))
 			if err != nil {
 				return err
 			}
+			defer theReader.Close()
+			_, err = io.Copy(io.MultiWriter(rw, fobj), theReader)
+			if err != nil {
+				return err
+			}
+		} else {
+			theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
 			defer theReader.Close()
 			_, err = io.Copy(rw, theReader)
 			if err != nil {
@@ -346,13 +310,21 @@ func (b *BackendFilesystem) List(path string) (entries []string, err error) {
 }
 
 func NewFileObject(cachedSize uint, actualSize int64, modifiedTime time.Time) *FileObject {
+	var ch []byte
+	var cwi int
+	if cachedSize == 0 {
+		ch = nil
+		cwi = 0
+	} else {
+		ch = make([]byte, cachedSize)
+		cwi = -1
+	}
 	return &FileObject{
-		cache:           make([]byte, cachedSize),
-		cacheWriteIndex: -1,
+		cache:           ch,
+		cacheWriteIndex: cwi,
 		modifyTime:      modifiedTime,
 		size:            actualSize,
 		locker:          &sync.Mutex{},
-		waiter:          &sync.WaitGroup{},
 	}
 }
 
@@ -362,7 +334,6 @@ type FileObject struct {
 	modifyTime      time.Time
 	size            int64
 	locker          *sync.Mutex
-	waiter          *sync.WaitGroup
 }
 
 func (fobj *FileObject) doCache() bool {
@@ -370,29 +341,22 @@ func (fobj *FileObject) doCache() bool {
 	defer fobj.locker.Unlock()
 	if fobj.cacheWriteIndex < 0 {
 		fobj.cacheWriteIndex = 0
-		fobj.waiter.Add(1)
 		return true
 	} else {
 		return false
 	}
 }
 
-func (fobj *FileObject) doCacheWait() {
-	fobj.waiter.Wait()
-}
-
-func (fobj *FileObject) doneCaching() {
-	fobj.waiter.Done()
-}
-
 func (fobj *FileObject) Write(p []byte) (n int, err error) {
 	if fobj.cacheWriteIndex < len(fobj.cache) {
 		if fobj.cacheWriteIndex+len(p) <= len(fobj.cache) {
 			copy(fobj.cache[fobj.cacheWriteIndex:], p)
+			fobj.cacheWriteIndex += len(p)
 		} else {
-			copy(fobj.cache[fobj.cacheWriteIndex:], p[0:len(fobj.cache)-fobj.cacheWriteIndex])
+			inputLen := len(fobj.cache) - fobj.cacheWriteIndex
+			copy(fobj.cache[fobj.cacheWriteIndex:], p[0:inputLen])
+			fobj.cacheWriteIndex += inputLen
 		}
-		fobj.cacheWriteIndex += len(p)
 	}
 	return len(p), nil
 }
@@ -449,15 +413,16 @@ func (fobjr *FileObjectReader) Close() error {
 }
 
 func (fobjr *FileObjectReader) Read(p []byte) (n int, err error) {
-	if int(fobjr.cacheReadIndex) < len(fobjr.fileObject.cache) {
-		if int(fobjr.cacheReadIndex)+len(p) <= len(fobjr.fileObject.cache) {
+	cacheLen := fobjr.fileObject.cacheWriteIndex
+	if int(fobjr.cacheReadIndex) < cacheLen {
+		if int(fobjr.cacheReadIndex)+len(p) <= cacheLen {
 			copy(p, fobjr.fileObject.cache[fobjr.cacheReadIndex:fobjr.cacheReadIndex+int64(len(p))])
 			fobjr.cacheReadIndex += int64(len(p))
 			return len(p), nil
 		} else {
-			numRead := len(fobjr.fileObject.cache) - int(fobjr.cacheReadIndex)
-			copy(p, fobjr.fileObject.cache[fobjr.cacheReadIndex:len(fobjr.fileObject.cache)])
-			fobjr.cacheReadIndex = int64(len(fobjr.fileObject.cache))
+			numRead := cacheLen - int(fobjr.cacheReadIndex)
+			copy(p, fobjr.fileObject.cache[fobjr.cacheReadIndex:cacheLen])
+			fobjr.cacheReadIndex = int64(cacheLen)
 			return numRead, nil
 		}
 	} else if fobjr.cacheReadIndex < fobjr.fileObject.size {
