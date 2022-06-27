@@ -1,0 +1,48 @@
+# Example Configuration file, all settings are defaulted to empty unless otherwise stated:
+# NOTE: Not all the shown values are default (But the defaults are all documented in the proceeding comment and undocumented ones are empty by default)
+logLevel: 4 #Current Levels: 0, Information; 1, Errors; 2, Requests and Responses; 3, Headers; 4, Track Response Sending
+listen: #HTTP server settings
+  web: ":8080" #Listening address and port in the format address:port
+  readTimeout: 30s #Read timeout of the HTTP servers as a duration, minimum: 1s
+  writeTimeout: 30s #Write timeout of the HTTP servers as a duration, minimum: 1s
+  idleTimeout: 30s #Idle timeout of the HTTP servers as a duration, minimum: 1s
+  identify: false #Send server identification headers
+zones: #An array of zones
+  - name: 'example' #The name of the zone (The main /{zone}/ sub-path), leave blank to set as the default for undefined zones
+    domains: [] #An array of domains that can be used as hosts to access the zone, leave blank to allow any
+    cacheResponse: #The cache response settings
+      maxAge: 0 #The maximum age of the cache
+      privateCache: false #Is the cache private
+      notModifiedUsingLastModified: true #Are the conditional headers attached to Last-Modified used to work out if to send a 304 Cache Redirect
+      notModifiedUsingETags: true #Are the conditional headers attached to ETag used to work out if to send a 304 Cache Redirect
+      requestLimitedCacheCheck: false #Can 304 Cache Redirect responses be sent if valid, even if the client has been request limited
+    downloadResponse: #The download hint response settings
+      outputDisposition: false #Should the Content-Disposition header be set to attachment
+      outputFilename: false #Should the Content-Disposition header have the filename set
+      setExtensionIfMissing: false #Should the set filename have an extension added if missing
+    accessLimit: #The access limit settings per object within the zone
+      purgeExpired: false #Purges objects when accessed when expired, however does not perform the purging of status information like DELETE does
+      expireTime: 0s #The duration of time from the first access of an object for the object to expire, 0 to disable
+      accessLimit: 0 #The number of accesses till an object revokes access, 0 to disable
+    limits: #A set of 3 fields with arrays of different limits
+      connectionLimits: #Limits the number of concurrent connections to the zone; Each entry uses a separate counter
+        - remoteAddresses: [] #An array of remote addresses to match this entry, leave blank to match other
+          maxConnections: 0 #The maximum number of connections, 0 to disable
+      requestLimits: #Limits the number of requests in an interval to a zone; Each entry uses a separate counter
+        - remoteAddresses: [] #An array of remote addresses to match this entry, leave blank to match other
+          requestRateInterval: 2m #The amount of time before the request counter resets for this entry, less than 10ms to disable
+          maxRequests: 64 #The maximum number of requests, 0 to disable
+      bandwidthLimits: #Limits the output bandwidth of a zone
+        - remoteAddresses: [] #An array of remote addresses to match this entry, leave blank to match other
+          interval: 50ms #The amount of time between send bursts, less than 1ms to disable
+          bytes: 65536 #The amount of bytes to send per burst, 0 to disable
+    backend: 'filesystem' #The name of the backend to use
+    backendSettings: #A set of fields with the settings specific to the backend, in this case for the filesystem backend
+      - directoryPath: "" #The path of the root directory, if blank or invalid, the current working directory is used instead
+        cachedHeaderBytes: 0 #The number of header (starting) bytes to cache in memory for each file object, 0 to disable
+        existsCheckCanFileOpen: false #Use an attempt to open a file object as part of the existence check
+        watchModified: false #If file objects should have stat used on every access
+        mimeTypeByExtension: false #If to output the mimetype of the file object using its path extension, default true
+        listDirectories: false #Enable listing directory objects
+        directoryModifiedTimeCheck: false #Enable getting the modified time for directory objects when using stat
+        calculateETags: false #Enable calculating ETags
