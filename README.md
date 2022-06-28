@@ -6,6 +6,7 @@
 This allows for content to be served off different zones with limits per IP address for concurrent connections, requests in an interval and bandwidth. 
 There is also configuration for backends (And can be extended by building with more backends). 
 This also supports cache processing using headers and 304 redirects; download hinting headers are also supported.
+Supports range requests and partial content responses.
 
 The use of DELETE is possible to tell the zone to clear cache in its backend and itself; GET, OPTIONS and HEAD are also supported.
 
@@ -21,7 +22,6 @@ The configuration must by placed in a .data sub-directory from the executable. A
 
 ### TODO:
 
-- Add range header support.
 - Add global limits per zone and for the entire CDN.
 - Add the API server support.
 - Add PUT support per zone for whitelisted IPs.
