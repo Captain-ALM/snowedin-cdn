@@ -10,6 +10,7 @@ listen: #HTTP server settings
 zones: #An array of zones
   - name: 'example' #The name of the zone (The main /{zone}/ sub-path), leave blank to set as the default for undefined zones
     domains: [] #An array of domains that can be used as hosts to access the zone, leave blank to allow any
+    allowRange: true #Allow range request support, default false
     cacheResponse: #The cache response settings
       maxAge: 0 #The maximum age of the cache
       privateCache: false #Is the cache private

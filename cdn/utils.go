@@ -92,6 +92,10 @@ func processRangePreconditions(maxLength int64, rw http.ResponseWriter, req *htt
 	theStrippedETag := getETagValue(etag)
 	modTStr := modT.Format(http.TimeFormat)
 
+	if canDoRange {
+		rw.Header().Set("Accept-Ranges", "bytes")
+	}
+
 	if canDoRange && !modT.IsZero() && strings.HasSuffix(req.Header.Get("If-Range"), "GMT") {
 		newModT, err := time.Parse(http.TimeFormat, modTStr)
 		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Range"))
@@ -105,14 +109,13 @@ func processRangePreconditions(maxLength int64, rw http.ResponseWriter, req *htt
 	}
 
 	if canDoRange && strings.HasPrefix(req.Header.Get("Range"), "bytes=") {
-		rw.Header().Set("Accept-Ranges", "bytes")
 		if theRanges := getRanges(req.Header.Get("Range"), maxLength); len(theRanges) != 0 {
 			if len(theRanges) == 1 {
 				rw.Header().Set("Content-Length", strconv.FormatInt(theRanges[0].length, 10))
+				rw.Header().Set("Content-Range", theRanges[0].getContentRange(maxLength))
 			} else {
-				theSize, theBoundary := getMultipartLength(theRanges, rw.Header().Get("Content-Type"), maxLength)
+				theSize := getMultipartLength(theRanges, rw.Header().Get("Content-Type"), maxLength)
 				rw.Header().Set("Content-Length", strconv.FormatInt(theSize, 10))
-				rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+theBoundary)
 			}
 			if writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPartialContent, "") {
 				return theRanges
@@ -150,21 +153,20 @@ func (c *countingWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func getMultipartLength(parts []rangeStruct, contentType string, maxLength int64) (int64, string) {
-	cWriter := &countingWriter{}
+func getMultipartLength(parts []rangeStruct, contentType string, maxLength int64) int64 {
+	cWriter := &countingWriter{length: 0}
 	var returnLength int64 = 0
 	multWriter := multipart.NewWriter(cWriter)
 	for _, currentPart := range parts {
-		multWriter.CreatePart(textproto.MIMEHeader{
+		_, _ = multWriter.CreatePart(textproto.MIMEHeader{
 			"Content-Range": {currentPart.getContentRange(maxLength)},
 			"Content-Type":  {contentType},
 		})
 		returnLength += currentPart.length
 	}
-	theBoundary := multWriter.Boundary()
 	_ = multWriter.Close()
 	returnLength += cWriter.length
-	return returnLength, theBoundary
+	return returnLength
 }
 
 func getRanges(rangeStringIn string, maxLength int64) []rangeStruct {
@@ -192,6 +194,8 @@ func getRanges(rangeStringIn string, maxLength int64) []rangeStruct {
 
 func getRange(rangePartIn string, maxLength int64) (rangeStruct, bool) {
 	before, after, done := strings.Cut(rangePartIn, "-")
+	before = strings.Trim(before, " ")
+	after = strings.Trim(after, " ")
 	if !done {
 		return rangeStruct{}, false
 	}
@@ -213,14 +217,14 @@ func getRange(rangePartIn string, maxLength int64) (rangeStruct, bool) {
 	if parsedBefore >= 0 && parsedAfter > parsedBefore && parsedAfter < maxLength {
 		return rangeStruct{
 			start:  parsedBefore,
-			length: parsedAfter - parsedBefore,
+			length: parsedAfter - parsedBefore + 1,
 		}, true
 	} else if parsedAfter < 0 && parsedBefore >= 0 && parsedBefore < maxLength {
 		return rangeStruct{
 			start:  parsedBefore,
 			length: maxLength - parsedBefore,
 		}, true
-	} else if parsedBefore < 0 && parsedAfter >= 0 && maxLength-parsedAfter >= 0 {
+	} else if parsedBefore < 0 && parsedAfter >= 1 && maxLength-parsedAfter >= 0 {
 		return rangeStruct{
 			start:  maxLength - parsedAfter,
 			length: parsedAfter,

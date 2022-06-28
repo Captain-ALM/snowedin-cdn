@@ -47,6 +47,7 @@ func (ly ListenYaml) GetIdleTimeout() time.Duration {
 type ZoneYaml struct {
 	Name             string               `yaml:"name"`
 	Domains          []string             `yaml:"domains"`
+	AllowRange       bool                 `yaml:"allowRange"`
 	CacheResponse    CacheSettingsYaml    `yaml:"cacheResponse"`
 	DownloadResponse DownloadSettingsYaml `yaml:"downloadResponse"`
 	AccessLimit      AccessLimitYaml      `yaml:"accessLimit"`

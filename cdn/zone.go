@@ -3,7 +3,9 @@ package cdn
 import (
 	"github.com/tomasen/realip"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"path"
 	"snow.mrmelon54.xyz/snowedin/structure"
 	"strconv"
@@ -125,33 +127,85 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 											}
 											rw.Header().Set("ETag", theETag)
 											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+											rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
 											if zone.Config.DownloadResponse.OutputDisposition {
-												setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), "text/plain; charset=utf-8")
+												setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), rw.Header().Get("Content-Type"))
 											}
-											if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
-												logPrintln(4, "Send Start")
-												var theWriter io.Writer
-												if bwlim.YamlValid() {
-													theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-												} else {
-													theWriter = rw
-												}
-												for i, cs := range list {
-													_, err = theWriter.Write([]byte(cs))
-													if err != nil {
-														logPrintln(1, "Internal Error: "+err.Error())
-														break
-													}
-													if i < len(list)-1 {
-														_, err = theWriter.Write([]byte("\r\n"))
+											if processSupportedPreconditionsForNext(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
+												httpRangeParts := processRangePreconditions(fsSize, rw, req, fsMod, theETag, zone.Config.AllowRange)
+												if httpRangeParts != nil {
+													if len(httpRangeParts) <= 1 {
+														logPrintln(4, "Send Start")
+														var theWriter io.Writer
+														if bwlim.YamlValid() {
+															theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+														} else {
+															theWriter = rw
+														}
+														if len(httpRangeParts) == 1 {
+															theWriter = newPartialRangeWriter(theWriter, httpRangeParts[0])
+														}
+														for i, cs := range list {
+															_, err = theWriter.Write([]byte(cs))
+															if err != nil {
+																logPrintln(1, "Internal Error: "+err.Error())
+																break
+															}
+															if i < len(list)-1 {
+																_, err = theWriter.Write([]byte("\r\n"))
+																if err != nil {
+																	logPrintln(1, "Internal Error: "+err.Error())
+																	break
+																}
+															}
+														}
+														if err == nil {
+															logPrintln(4, "Send Complete")
+														}
+													} else {
+														logPrintln(4, "Send Start")
+														theListingString := ""
+														for i, cs := range list {
+															theListingString += cs
+															if i < len(list)-1 {
+																theListingString += "\r\n"
+															}
+														}
+														var theWriter io.Writer
+														if bwlim.YamlValid() {
+															theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+														} else {
+															theWriter = rw
+														}
+														multWriter := multipart.NewWriter(theWriter)
+														rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
+														logPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
+														for _, currentPart := range httpRangeParts {
+															mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
+																"Content-Range": {currentPart.getContentRange(fsSize)},
+																"Content-Type":  {"text/plain; charset=utf-8"},
+															})
+															logPrintln(3, "Content-Range: "+currentPart.getContentRange(fsSize))
+															logPrintln(3, "Content-Type: text/plain; charset=utf-8")
+															logPrintln(4, "Part Start")
+															if err != nil {
+																logPrintln(1, "Internal Error: "+err.Error())
+																break
+															}
+															_, err = mimePart.Write([]byte(theListingString[currentPart.start : currentPart.start+currentPart.length]))
+															if err != nil {
+																logPrintln(1, "Internal Error: "+err.Error())
+																break
+															}
+															logPrintln(4, "Part End")
+														}
+														err := multWriter.Close()
 														if err != nil {
 															logPrintln(1, "Internal Error: "+err.Error())
-															break
+														} else {
+															logPrintln(4, "Send Complete")
 														}
 													}
-												}
-												if err == nil {
-													logPrintln(4, "Send Complete")
 												}
 											}
 											if zone.Config.CacheResponse.RequestLimitedCacheCheck {
@@ -189,19 +243,74 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 													}
 													rw.Header().Set("Content-Type", theMimeType)
 												}
-												if processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
-													logPrintln(4, "Send Start")
-													var theWriter io.Writer
-													if bwlim.YamlValid() {
-														theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-													} else {
-														theWriter = rw
-													}
-													err = zone.Backend.WriteData(lookupPath, theWriter)
-													if err != nil {
-														logPrintln(1, "Internal Error: "+err.Error())
-													} else {
-														logPrintln(4, "Send Complete")
+												if processSupportedPreconditionsForNext(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
+													httpRangeParts := processRangePreconditions(fsSize, rw, req, fsMod, theETag, zone.Config.AllowRange)
+													if httpRangeParts != nil {
+														if len(httpRangeParts) == 0 {
+															logPrintln(4, "Send Start")
+															var theWriter io.Writer
+															if bwlim.YamlValid() {
+																theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+															} else {
+																theWriter = rw
+															}
+															err = zone.Backend.WriteData(lookupPath, theWriter)
+															if err != nil {
+																logPrintln(1, "Internal Error: "+err.Error())
+															} else {
+																logPrintln(4, "Send Complete")
+															}
+														} else if len(httpRangeParts) == 1 {
+															logPrintln(4, "Send Start")
+															var theWriter io.Writer
+															if bwlim.YamlValid() {
+																theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+															} else {
+																theWriter = rw
+															}
+															err = zone.Backend.WriteDataRange(lookupPath, theWriter, httpRangeParts[0].start, httpRangeParts[0].length)
+															if err != nil {
+																logPrintln(1, "Internal Error: "+err.Error())
+															} else {
+																logPrintln(4, "Send Complete")
+															}
+														} else {
+															logPrintln(4, "Send Start")
+															var theWriter io.Writer
+															if bwlim.YamlValid() {
+																theWriter = GetLimitedBandwidthWriter(bwlim, rw)
+															} else {
+																theWriter = rw
+															}
+															multWriter := multipart.NewWriter(theWriter)
+															rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
+															logPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
+															for _, currentPart := range httpRangeParts {
+																mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
+																	"Content-Range": {currentPart.getContentRange(fsSize)},
+																	"Content-Type":  {theMimeType},
+																})
+																logPrintln(3, "Content-Range: "+currentPart.getContentRange(fsSize))
+																logPrintln(3, "Content-Type: "+theMimeType)
+																logPrintln(4, "Part Start")
+																if err != nil {
+																	logPrintln(1, "Internal Error: "+err.Error())
+																	break
+																}
+																err = zone.Backend.WriteDataRange(lookupPath, mimePart, currentPart.start, currentPart.length)
+																if err != nil {
+																	logPrintln(1, "Internal Error: "+err.Error())
+																	break
+																}
+																logPrintln(4, "Part End")
+															}
+															err := multWriter.Close()
+															if err != nil {
+																logPrintln(1, "Internal Error: "+err.Error())
+															} else {
+																logPrintln(4, "Send Complete")
+															}
+														}
 													}
 												}
 											} else {
