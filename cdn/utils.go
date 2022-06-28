@@ -5,12 +5,18 @@ import (
 	"encoding/hex"
 	"log"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"snow.mrmelon54.xyz/snowedin/structure"
 	"strconv"
 	"strings"
 	"time"
 )
+
+func processSupportedPreconditionsForNext(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
+	return processSupportedPreconditions(0, "", rw, req, modT, etag, noBypassModify, noBypassMatch)
+}
 
 func processSupportedPreconditions200(rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
 	return processSupportedPreconditions(http.StatusOK, "", rw, req, modT, etag, noBypassModify, noBypassMatch)
@@ -57,28 +63,170 @@ func processSupportedPreconditions(statusCode int, statusMessage string, rw http
 
 	if noBypassModify && !modT.IsZero() && req.Header.Get("If-Modified-Since") != "" {
 		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Modified-Since"))
-		if err == nil {
-			if modT.Before(parse) || strings.EqualFold(modT.Format(http.TimeFormat), req.Header.Get("If-Modified-Since")) {
-				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotModified, "")
-				logPrintln(4, "Send Skipped")
-				return false
-			}
+		if err == nil && modT.Before(parse) || strings.EqualFold(modT.Format(http.TimeFormat), req.Header.Get("If-Modified-Since")) {
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotModified, "")
+			logPrintln(4, "Send Skipped")
+			return false
 		}
 	}
 
 	if noBypassModify && !modT.IsZero() && req.Header.Get("If-Unmodified-Since") != "" {
 		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Unmodified-Since"))
-		if err == nil {
-			if modT.After(parse) {
-				switchToNonCachingHeaders(rw.Header())
-				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPreconditionFailed, "")
-				logPrintln(4, "Send Condition Not Satisfied")
-				return false
-			}
+		if err == nil && modT.After(parse) {
+			switchToNonCachingHeaders(rw.Header())
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPreconditionFailed, "")
+			logPrintln(4, "Send Condition Not Satisfied")
+			return false
 		}
 	}
 
-	return writeResponseHeaderCanWriteBody(2, req.Method, rw, statusCode, statusMessage)
+	if statusCode >= 100 {
+		return writeResponseHeaderCanWriteBody(2, req.Method, rw, statusCode, statusMessage)
+	} else {
+		return true
+	}
+}
+
+func processRangePreconditions(maxLength int64, rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, supported bool) []rangeStruct {
+	canDoRange := supported
+	theStrippedETag := getETagValue(etag)
+	modTStr := modT.Format(http.TimeFormat)
+
+	if canDoRange && !modT.IsZero() && strings.HasSuffix(req.Header.Get("If-Range"), "GMT") {
+		newModT, err := time.Parse(http.TimeFormat, modTStr)
+		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Range"))
+		if err == nil && !newModT.Equal(parse) {
+			canDoRange = false
+		}
+	} else if canDoRange && theStrippedETag != "" && req.Header.Get("If-Range") != "" {
+		if getETagValue(req.Header.Get("If-Range")) != theStrippedETag {
+			canDoRange = false
+		}
+	}
+
+	if canDoRange && strings.HasPrefix(req.Header.Get("Range"), "bytes=") {
+		rw.Header().Set("Accept-Ranges", "bytes")
+		if theRanges := getRanges(req.Header.Get("Range"), maxLength); len(theRanges) != 0 {
+			if len(theRanges) == 1 {
+				rw.Header().Set("Content-Length", strconv.FormatInt(theRanges[0].length, 10))
+			} else {
+				theSize, theBoundary := getMultipartLength(theRanges, rw.Header().Get("Content-Type"), maxLength)
+				rw.Header().Set("Content-Length", strconv.FormatInt(theSize, 10))
+				rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+theBoundary)
+			}
+			if writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPartialContent, "") {
+				return theRanges
+			} else {
+				return nil
+			}
+		} else {
+			switchToNonCachingHeaders(rw.Header())
+			rw.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(maxLength, 10))
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusRequestedRangeNotSatisfiable, "")
+			logPrintln(4, "Requested Range Not Satisfiable")
+			return nil
+		}
+	}
+	if writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "") {
+		return make([]rangeStruct, 0)
+	}
+	return nil
+}
+
+type rangeStruct struct {
+	start, length int64
+}
+
+func (rstrc rangeStruct) getContentRange(maxLength int64) string {
+	return "bytes " + strconv.FormatInt(rstrc.start, 10) + "-" + strconv.FormatInt(rstrc.start+rstrc.length-1, 10) + "/" + strconv.FormatInt(maxLength, 10)
+}
+
+type countingWriter struct {
+	length int64
+}
+
+func (c *countingWriter) Write(p []byte) (n int, err error) {
+	c.length += int64(len(p))
+	return len(p), nil
+}
+
+func getMultipartLength(parts []rangeStruct, contentType string, maxLength int64) (int64, string) {
+	cWriter := &countingWriter{}
+	var returnLength int64 = 0
+	multWriter := multipart.NewWriter(cWriter)
+	for _, currentPart := range parts {
+		multWriter.CreatePart(textproto.MIMEHeader{
+			"Content-Range": {currentPart.getContentRange(maxLength)},
+			"Content-Type":  {contentType},
+		})
+		returnLength += currentPart.length
+	}
+	theBoundary := multWriter.Boundary()
+	_ = multWriter.Close()
+	returnLength += cWriter.length
+	return returnLength, theBoundary
+}
+
+func getRanges(rangeStringIn string, maxLength int64) []rangeStruct {
+	actualRangeString := strings.TrimPrefix(rangeStringIn, "bytes=")
+	if strings.ContainsAny(actualRangeString, ",") {
+		seperated := strings.Split(actualRangeString, ",")
+		toReturn := make([]rangeStruct, len(seperated))
+		pos := 0
+		for _, s := range seperated {
+			if cRange, ok := getRange(s, maxLength); ok {
+				toReturn[pos] = cRange
+				pos += 1
+			}
+		}
+		if pos == 0 {
+			return nil
+		}
+		return toReturn[:pos]
+	}
+	if cRange, ok := getRange(actualRangeString, maxLength); ok {
+		return []rangeStruct{cRange}
+	}
+	return nil
+}
+
+func getRange(rangePartIn string, maxLength int64) (rangeStruct, bool) {
+	before, after, done := strings.Cut(rangePartIn, "-")
+	if !done {
+		return rangeStruct{}, false
+	}
+	var parsedAfter, parsedBefore int64 = -1, -1
+	if after != "" {
+		if parsed, err := strconv.ParseInt(after, 10, 64); err == nil {
+			parsedAfter = parsed
+		} else {
+			return rangeStruct{}, false
+		}
+	}
+	if before != "" {
+		if parsed, err := strconv.ParseInt(before, 10, 64); err == nil {
+			parsedBefore = parsed
+		} else {
+			return rangeStruct{}, false
+		}
+	}
+	if parsedBefore >= 0 && parsedAfter > parsedBefore && parsedAfter < maxLength {
+		return rangeStruct{
+			start:  parsedBefore,
+			length: parsedAfter - parsedBefore,
+		}, true
+	} else if parsedAfter < 0 && parsedBefore >= 0 && parsedBefore < maxLength {
+		return rangeStruct{
+			start:  parsedBefore,
+			length: maxLength - parsedBefore,
+		}, true
+	} else if parsedBefore < 0 && parsedAfter >= 0 && maxLength-parsedAfter >= 0 {
+		return rangeStruct{
+			start:  maxLength - parsedAfter,
+			length: parsedAfter,
+		}, true
+	}
+	return rangeStruct{}, false
 }
 
 func getValueForETagUsingAttributes(timeIn time.Time, sizeIn int64) string {
