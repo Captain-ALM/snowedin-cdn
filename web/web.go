@@ -38,6 +38,17 @@ func New(cdnIn *cdn.CDN) *http.Server {
 	return s
 }
 
+func runBackgroundHttp(s *http.Server) {
+	err := s.ListenAndServe()
+	if err != nil {
+		if err == http.ErrServerClosed {
+			logPrintln(0, "The http server shutdown successfully")
+		} else {
+			log.Fatalf("[Http] Error trying to host the http server: %s\n", err.Error())
+		}
+	}
+}
+
 func zoneHandlerFunc(rw http.ResponseWriter, req *http.Request, cdnIn *cdn.CDN) {
 	logRequest(req)
 	if req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodDelete {

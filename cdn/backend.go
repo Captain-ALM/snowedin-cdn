@@ -2,7 +2,7 @@ package cdn
 
 import (
 	"io"
-	"snow.mrmelon54.xyz/snowedin/cdn/backends"
+	"snow.mrmelon54.xyz/snowedin/cdn/backends/filesystem"
 	"time"
 )
 
@@ -19,7 +19,7 @@ type Backend interface {
 
 func NewBackendFromName(name string, confMap map[string]string) Backend {
 	if name == "filesystem" {
-		return backends.NewBackendFilesystem(confMap)
+		return filesystem.NewBackendFilesystem(confMap)
 	}
 	return nil
 }

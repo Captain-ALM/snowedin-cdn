@@ -11,7 +11,7 @@ import (
 	"path"
 	"snow.mrmelon54.xyz/snowedin/api"
 	"snow.mrmelon54.xyz/snowedin/cdn"
-	"snow.mrmelon54.xyz/snowedin/structure"
+	"snow.mrmelon54.xyz/snowedin/conf"
 	"snow.mrmelon54.xyz/snowedin/web"
 	"sync"
 	"syscall"
@@ -61,7 +61,7 @@ func main() {
 		log.Fatalln("Failed to open config.yml")
 	}
 
-	var configYml structure.ConfigYaml
+	var configYml conf.ConfigYaml
 	groupsDecoder := yaml.NewDecoder(configFile)
 	err = groupsDecoder.Decode(&configYml)
 	if err != nil {

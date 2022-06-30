@@ -7,15 +7,14 @@ import (
 	"net/http"
 	"net/textproto"
 	"path"
-	"snow.mrmelon54.xyz/snowedin/structure"
+	"snow.mrmelon54.xyz/snowedin/cdn/limits"
+	"snow.mrmelon54.xyz/snowedin/cdn/utils"
+	"snow.mrmelon54.xyz/snowedin/conf"
 	"strconv"
 	"strings"
-	"time"
 )
 
-var LogLevel uint = 0
-
-func NewZone(conf structure.ZoneYaml, logLevel uint) *Zone {
+func NewZone(conf conf.ZoneYaml, logLevel uint) *Zone {
 	var thePathAttributes map[string]*ZonePathAttributes
 	if conf.CacheResponse.RequestLimitedCacheCheck {
 		thePathAttributes = make(map[string]*ZonePathAttributes)
@@ -23,24 +22,24 @@ func NewZone(conf structure.ZoneYaml, logLevel uint) *Zone {
 	cZone := &Zone{
 		Config:           conf,
 		Backend:          NewBackendFromName(conf.Backend, conf.BackendSettings),
-		AccessLimits:     make(map[string]*AccessLimit),
-		RequestLimits:    make(map[string]*RequestLimit),
-		ConnectionLimits: make(map[string]*ConnectionLimit),
+		AccessLimits:     make(map[string]*limits.AccessLimit),
+		RequestLimits:    make(map[string]*limits.RequestLimit),
+		ConnectionLimits: make(map[string]*limits.ConnectionLimit),
 		PathAttributes:   thePathAttributes,
 	}
 	if cZone.Backend == nil {
 		return nil
 	}
-	LogLevel = logLevel
+	utils.LogLevel = logLevel
 	return cZone
 }
 
 type Zone struct {
-	Config           structure.ZoneYaml
+	Config           conf.ZoneYaml
 	Backend          Backend
-	AccessLimits     map[string]*AccessLimit
-	RequestLimits    map[string]*RequestLimit
-	ConnectionLimits map[string]*ConnectionLimit
+	AccessLimits     map[string]*limits.AccessLimit
+	RequestLimits    map[string]*limits.RequestLimit
+	ConnectionLimits map[string]*limits.ConnectionLimit
 	PathAttributes   map[string]*ZonePathAttributes
 }
 
@@ -53,17 +52,17 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 	if zone.RequestLimits[clientIP] == nil {
 		rqlim := zone.Config.Limits.GetLimitRequestsYaml(clientIP)
-		zone.RequestLimits[clientIP] = NewRequestLimit(rqlim)
+		zone.RequestLimits[clientIP] = limits.NewRequestLimit(rqlim)
 	}
 
 	if zone.ConnectionLimits[clientIP] == nil {
 		cnlim := zone.Config.Limits.GetLimitConnectionYaml(clientIP)
-		zone.ConnectionLimits[clientIP] = NewConnectionLimit(cnlim)
+		zone.ConnectionLimits[clientIP] = limits.NewConnectionLimit(cnlim)
 	}
 
 	bwlim := zone.Config.Limits.GetBandwidthLimitYaml(clientIP)
 
-	if !zone.ConnectionLimits[clientIP].limitConf.YamlValid() || zone.ConnectionLimits[clientIP].startConnection() {
+	if !zone.ConnectionLimits[clientIP].LimitConf.YamlValid() || zone.ConnectionLimits[clientIP].StartConnection() {
 
 		lookupPath := strings.TrimPrefix(path.Clean(strings.TrimPrefix(req.URL.Path, "/"+zone.Config.Name+"/")), "/")
 
@@ -71,7 +70,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 			lookupPath = lookupPath[:idx]
 		}
 
-		if !zone.RequestLimits[clientIP].limitConf.YamlValid() || zone.RequestLimits[clientIP].startRequest() {
+		if !zone.RequestLimits[clientIP].LimitConf.YamlValid() || zone.RequestLimits[clientIP].StartRequest() {
 
 			pexists, plistable := zone.Backend.Exists(lookupPath)
 
@@ -79,275 +78,25 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 				zLAccessLimts := zone.AccessLimits[lookupPath]
 				if zLAccessLimts == nil {
-					zLAccessLimts = NewAccessLimit(zone.Config.AccessLimit)
+					zLAccessLimts = limits.NewAccessLimit(zone.Config.AccessLimit)
 					zone.AccessLimits[lookupPath] = zLAccessLimts
 				}
 
-				if req.Method == http.MethodGet || req.Method == http.MethodHead {
-
-					if zLAccessLimts.Gone {
-						setNeverCacheHeader(rw.Header())
-						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Gone")
-					} else {
-						if zLAccessLimts.accessLimitReached() {
-							setNeverCacheHeader(rw.Header())
-							writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "Access Limit Reached")
-						} else {
-							if zLAccessLimts.isExpired() {
-								setNeverCacheHeader(rw.Header())
-								if zone.Config.AccessLimit.PurgeExpired {
-									err := zone.Backend.Purge(lookupPath)
-									if err == nil {
-										writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
-									} else {
-										writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Purge Error: "+err.Error())
-									}
-								} else {
-									writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
-								}
-							} else {
-								fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
-								if err == nil {
-									theETag := zone.Backend.ETag(lookupPath)
-									if plistable {
-										list, err := zone.Backend.List(lookupPath)
-										if err == nil {
-											setLastModifiedHeader(rw.Header(), fsMod)
-											if zLAccessLimts.ExpireTime.IsZero() {
-												setCacheHeaderWithAge(rw.Header(), zone.Config.CacheResponse.MaxAge, fsMod, zone.Config.CacheResponse.PrivateCache)
-											} else {
-												setExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
-												if zone.Config.CacheResponse.PrivateCache {
-													rw.Header().Set("Cache-Control", "private")
-												}
-											}
-											fsSize = int64(lengthOfStringSlice(list))
-											if theETag == "" {
-												theETag = getValueForETagUsingAttributes(fsMod, fsSize)
-											}
-											rw.Header().Set("ETag", theETag)
-											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
-											if zone.Config.DownloadResponse.OutputDisposition {
-												setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), rw.Header().Get("Content-Type"))
-											}
-											if processSupportedPreconditionsForNext(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
-												httpRangeParts := processRangePreconditions(fsSize, rw, req, fsMod, theETag, zone.Config.AllowRange)
-												if httpRangeParts != nil {
-													if len(httpRangeParts) <= 1 {
-														logPrintln(4, "Send Start")
-														var theWriter io.Writer
-														if bwlim.YamlValid() {
-															theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-														} else {
-															theWriter = rw
-														}
-														if len(httpRangeParts) == 1 {
-															theWriter = newPartialRangeWriter(theWriter, httpRangeParts[0])
-														}
-														for i, cs := range list {
-															_, err = theWriter.Write([]byte(cs))
-															if err != nil {
-																logPrintln(1, "Internal Error: "+err.Error())
-																break
-															}
-															if i < len(list)-1 {
-																_, err = theWriter.Write([]byte("\r\n"))
-																if err != nil {
-																	logPrintln(1, "Internal Error: "+err.Error())
-																	break
-																}
-															}
-														}
-														if err == nil {
-															logPrintln(4, "Send Complete")
-														}
-													} else {
-														logPrintln(4, "Send Start")
-														theListingString := ""
-														for i, cs := range list {
-															theListingString += cs
-															if i < len(list)-1 {
-																theListingString += "\r\n"
-															}
-														}
-														var theWriter io.Writer
-														if bwlim.YamlValid() {
-															theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-														} else {
-															theWriter = rw
-														}
-														multWriter := multipart.NewWriter(theWriter)
-														rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
-														logPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
-														for _, currentPart := range httpRangeParts {
-															mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
-																"Content-Range": {currentPart.getContentRange(fsSize)},
-																"Content-Type":  {"text/plain; charset=utf-8"},
-															})
-															logPrintln(3, "Content-Range: "+currentPart.getContentRange(fsSize))
-															logPrintln(3, "Content-Type: text/plain; charset=utf-8")
-															logPrintln(4, "Part Start")
-															if err != nil {
-																logPrintln(1, "Internal Error: "+err.Error())
-																break
-															}
-															_, err = mimePart.Write([]byte(theListingString[currentPart.start : currentPart.start+currentPart.length]))
-															if err != nil {
-																logPrintln(1, "Internal Error: "+err.Error())
-																break
-															}
-															logPrintln(4, "Part End")
-														}
-														err := multWriter.Close()
-														if err != nil {
-															logPrintln(1, "Internal Error: "+err.Error())
-														} else {
-															logPrintln(4, "Send Complete")
-														}
-													}
-												}
-											}
-											if zone.Config.CacheResponse.RequestLimitedCacheCheck {
-												if zone.PathAttributes[lookupPath] == nil {
-													zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
-												} else {
-													zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
-												}
-											}
-										} else {
-											setNeverCacheHeader(rw.Header())
-											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
-										}
-									} else {
-										if theETag == "" {
-											theETag = getValueForETagUsingAttributes(fsMod, fsSize)
-										}
-										rw.Header().Set("ETag", theETag)
-										setLastModifiedHeader(rw.Header(), fsMod)
-										if zLAccessLimts.ExpireTime.IsZero() {
-											setCacheHeaderWithAge(rw.Header(), zone.Config.CacheResponse.MaxAge, fsMod, zone.Config.CacheResponse.PrivateCache)
-										} else {
-											setExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
-											if zone.Config.CacheResponse.PrivateCache {
-												rw.Header().Set("Cache-Control", "private")
-											}
-										}
-										if fsSize >= 0 {
-											rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
-											if fsSize > 0 {
-												theMimeType := zone.Backend.MimeType(lookupPath)
-												if theMimeType != "" {
-													if zone.Config.DownloadResponse.OutputDisposition {
-														setDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, getFilenameFromPath(lookupPath), theMimeType)
-													}
-													rw.Header().Set("Content-Type", theMimeType)
-												}
-												if processSupportedPreconditionsForNext(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
-													httpRangeParts := processRangePreconditions(fsSize, rw, req, fsMod, theETag, zone.Config.AllowRange)
-													if httpRangeParts != nil {
-														if len(httpRangeParts) == 0 {
-															logPrintln(4, "Send Start")
-															var theWriter io.Writer
-															if bwlim.YamlValid() {
-																theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-															} else {
-																theWriter = rw
-															}
-															err = zone.Backend.WriteData(lookupPath, theWriter)
-															if err != nil {
-																logPrintln(1, "Internal Error: "+err.Error())
-															} else {
-																logPrintln(4, "Send Complete")
-															}
-														} else if len(httpRangeParts) == 1 {
-															logPrintln(4, "Send Start")
-															var theWriter io.Writer
-															if bwlim.YamlValid() {
-																theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-															} else {
-																theWriter = rw
-															}
-															err = zone.Backend.WriteDataRange(lookupPath, theWriter, httpRangeParts[0].start, httpRangeParts[0].length)
-															if err != nil {
-																logPrintln(1, "Internal Error: "+err.Error())
-															} else {
-																logPrintln(4, "Send Complete")
-															}
-														} else {
-															logPrintln(4, "Send Start")
-															var theWriter io.Writer
-															if bwlim.YamlValid() {
-																theWriter = GetLimitedBandwidthWriter(bwlim, rw)
-															} else {
-																theWriter = rw
-															}
-															multWriter := multipart.NewWriter(theWriter)
-															rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
-															logPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
-															for _, currentPart := range httpRangeParts {
-																mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
-																	"Content-Range": {currentPart.getContentRange(fsSize)},
-																	"Content-Type":  {theMimeType},
-																})
-																logPrintln(3, "Content-Range: "+currentPart.getContentRange(fsSize))
-																logPrintln(3, "Content-Type: "+theMimeType)
-																logPrintln(4, "Part Start")
-																if err != nil {
-																	logPrintln(1, "Internal Error: "+err.Error())
-																	break
-																}
-																err = zone.Backend.WriteDataRange(lookupPath, mimePart, currentPart.start, currentPart.length)
-																if err != nil {
-																	logPrintln(1, "Internal Error: "+err.Error())
-																	break
-																}
-																logPrintln(4, "Part End")
-															}
-															err := multWriter.Close()
-															if err != nil {
-																logPrintln(1, "Internal Error: "+err.Error())
-															} else {
-																logPrintln(4, "Send Complete")
-															}
-														}
-													}
-												}
-											} else {
-												processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
-											}
-											if zone.Config.CacheResponse.RequestLimitedCacheCheck {
-												if zone.PathAttributes[lookupPath] == nil {
-													zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
-												} else {
-													zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
-												}
-											}
-										} else {
-											switchToNonCachingHeaders(rw.Header())
-											writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
-										}
-									}
-								} else {
-									setNeverCacheHeader(rw.Header())
-									writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Stat Failure: "+err.Error())
-								}
-							}
-						}
-					}
-
-				} else if req.Method == http.MethodDelete {
+				switch req.Method {
+				case http.MethodGet, http.MethodHead:
+					zone.handleZoneGetAndHead(rw, req, zLAccessLimts, lookupPath, plistable, bwlim)
+				case http.MethodDelete:
 					err := zone.Backend.Purge(lookupPath)
 					if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil {
 						zone.PathAttributes[lookupPath].NotExpunged = false
 					}
-					setNeverCacheHeader(rw.Header())
+					utils.SetNeverCacheHeader(rw.Header())
 					if err == nil {
 						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
 					} else {
 						writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Purge Error: "+err.Error())
 					}
-				} else {
+				default:
 					writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusForbidden, "Forbidden Method")
 				}
 
@@ -358,7 +107,7 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				if zone.AccessLimits[lookupPath] != nil {
 					zone.AccessLimits[lookupPath] = nil
 				}
-				setNeverCacheHeader(rw.Header())
+				utils.SetNeverCacheHeader(rw.Header())
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotFound, "Object Not Found")
 			}
 		} else {
@@ -366,16 +115,269 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				zone.PathAttributes[lookupPath].UpdateHeader(rw.Header())
 				processSupportedPreconditions429(rw, req, zone.PathAttributes[lookupPath].lastModifiedTime, zone.PathAttributes[lookupPath].eTag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
 			} else {
-				setNeverCacheHeader(rw.Header())
+				utils.SetNeverCacheHeader(rw.Header())
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Requests")
 			}
 		}
-		if zone.ConnectionLimits[clientIP].limitConf.YamlValid() {
-			zone.ConnectionLimits[clientIP].stopConnection()
+		if zone.ConnectionLimits[clientIP].LimitConf.YamlValid() {
+			zone.ConnectionLimits[clientIP].StopConnection()
 		}
 	} else {
-		setNeverCacheHeader(rw.Header())
+		utils.SetNeverCacheHeader(rw.Header())
 		writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Connections")
+	}
+}
+
+func (zone *Zone) handleZoneGetAndHead(rw http.ResponseWriter, req *http.Request, zLAccessLimts *limits.AccessLimit, lookupPath string, plistable bool, bwlim conf.BandwidthLimitYaml) {
+	if zLAccessLimts.Gone {
+		utils.SetNeverCacheHeader(rw.Header())
+		writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Gone")
+	} else {
+		if zLAccessLimts.AccessLimitReached() {
+			utils.SetNeverCacheHeader(rw.Header())
+			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "Access Limit Reached")
+		} else {
+			if zLAccessLimts.Expired() {
+				utils.SetNeverCacheHeader(rw.Header())
+				if zone.Config.AccessLimit.PurgeExpired {
+					err := zone.Backend.Purge(lookupPath)
+					if err == nil {
+						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
+					} else {
+						writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Purge Error: "+err.Error())
+					}
+				} else {
+					writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusGone, "Object Expired")
+				}
+			} else {
+				fsSize, fsMod, err := zone.Backend.Stats(lookupPath)
+				if err == nil {
+					theETag := zone.Backend.ETag(lookupPath)
+					if plistable {
+						list, err := zone.Backend.List(lookupPath)
+						if err == nil {
+							utils.SetLastModifiedHeader(rw.Header(), fsMod)
+							if zLAccessLimts.ExpireTime.IsZero() {
+								utils.SetCacheHeaderWithAge(rw.Header(), zone.Config.CacheResponse.MaxAge, fsMod, zone.Config.CacheResponse.PrivateCache)
+							} else {
+								utils.SetExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
+								if zone.Config.CacheResponse.PrivateCache {
+									rw.Header().Set("Cache-Control", "private")
+								}
+							}
+							fsSize = int64(utils.LengthOfStringSlice(list))
+							if theETag == "" {
+								theETag = utils.GetValueForETagUsingAttributes(fsMod, fsSize)
+							}
+							rw.Header().Set("ETag", theETag)
+							rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+							rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+							if zone.Config.DownloadResponse.OutputDisposition {
+								utils.SetDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, utils.GetFilenameFromPath(lookupPath), rw.Header().Get("Content-Type"))
+							}
+							if processSupportedPreconditionsForNext(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
+								httpRangeParts := processRangePreconditions(fsSize, rw, req, fsMod, theETag, zone.Config.AllowRange)
+								if httpRangeParts != nil {
+									if len(httpRangeParts) <= 1 {
+										utils.LogPrintln(4, "Send Start")
+										var theWriter io.Writer
+										if bwlim.YamlValid() {
+											theWriter = limits.GetLimitedBandwidthWriter(bwlim, rw)
+										} else {
+											theWriter = rw
+										}
+										if len(httpRangeParts) == 1 {
+											theWriter = limits.NewPartialRangeWriter(theWriter, httpRangeParts[0])
+										}
+										for i, cs := range list {
+											_, err = theWriter.Write([]byte(cs))
+											if err != nil {
+												utils.LogPrintln(1, "Internal Error: "+err.Error())
+												break
+											}
+											if i < len(list)-1 {
+												_, err = theWriter.Write([]byte("\r\n"))
+												if err != nil {
+													utils.LogPrintln(1, "Internal Error: "+err.Error())
+													break
+												}
+											}
+										}
+										if err == nil {
+											utils.LogPrintln(4, "Send Complete")
+										}
+									} else {
+										utils.LogPrintln(4, "Send Start")
+										theListingString := ""
+										for i, cs := range list {
+											theListingString += cs
+											if i < len(list)-1 {
+												theListingString += "\r\n"
+											}
+										}
+										var theWriter io.Writer
+										if bwlim.YamlValid() {
+											theWriter = limits.GetLimitedBandwidthWriter(bwlim, rw)
+										} else {
+											theWriter = rw
+										}
+										multWriter := multipart.NewWriter(theWriter)
+										rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
+										utils.LogPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
+										for _, currentPart := range httpRangeParts {
+											mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
+												"Content-Range": {currentPart.ToField(fsSize)},
+												"Content-Type":  {"text/plain; charset=utf-8"},
+											})
+											utils.LogPrintln(3, "Content-Range: "+currentPart.ToField(fsSize))
+											utils.LogPrintln(3, "Content-Type: text/plain; charset=utf-8")
+											utils.LogPrintln(4, "Part Start")
+											if err != nil {
+												utils.LogPrintln(1, "Internal Error: "+err.Error())
+												break
+											}
+											_, err = mimePart.Write([]byte(theListingString[currentPart.Start : currentPart.Start+currentPart.Length]))
+											if err != nil {
+												utils.LogPrintln(1, "Internal Error: "+err.Error())
+												break
+											}
+											utils.LogPrintln(4, "Part End")
+										}
+										err := multWriter.Close()
+										if err != nil {
+											utils.LogPrintln(1, "Internal Error: "+err.Error())
+										} else {
+											utils.LogPrintln(4, "Send Complete")
+										}
+									}
+								}
+							}
+							if zone.Config.CacheResponse.RequestLimitedCacheCheck {
+								if zone.PathAttributes[lookupPath] == nil {
+									zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
+								} else {
+									zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
+								}
+							}
+						} else {
+							utils.SetNeverCacheHeader(rw.Header())
+							writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
+						}
+					} else {
+						if theETag == "" {
+							theETag = utils.GetValueForETagUsingAttributes(fsMod, fsSize)
+						}
+						rw.Header().Set("ETag", theETag)
+						utils.SetLastModifiedHeader(rw.Header(), fsMod)
+						if zLAccessLimts.ExpireTime.IsZero() {
+							utils.SetCacheHeaderWithAge(rw.Header(), zone.Config.CacheResponse.MaxAge, fsMod, zone.Config.CacheResponse.PrivateCache)
+						} else {
+							utils.SetExpiresHeader(rw.Header(), zLAccessLimts.ExpireTime)
+							if zone.Config.CacheResponse.PrivateCache {
+								rw.Header().Set("Cache-Control", "private")
+							}
+						}
+						if fsSize >= 0 {
+							rw.Header().Set("Content-Length", strconv.FormatInt(fsSize, 10))
+							if fsSize > 0 {
+								theMimeType := zone.Backend.MimeType(lookupPath)
+								if theMimeType != "" {
+									if zone.Config.DownloadResponse.OutputDisposition {
+										utils.SetDownloadHeaders(rw.Header(), zone.Config.DownloadResponse, utils.GetFilenameFromPath(lookupPath), theMimeType)
+									}
+									rw.Header().Set("Content-Type", theMimeType)
+								}
+								if processSupportedPreconditionsForNext(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags) {
+									httpRangeParts := processRangePreconditions(fsSize, rw, req, fsMod, theETag, zone.Config.AllowRange)
+									if httpRangeParts != nil {
+										if len(httpRangeParts) == 0 {
+											utils.LogPrintln(4, "Send Start")
+											var theWriter io.Writer
+											if bwlim.YamlValid() {
+												theWriter = limits.GetLimitedBandwidthWriter(bwlim, rw)
+											} else {
+												theWriter = rw
+											}
+											err = zone.Backend.WriteData(lookupPath, theWriter)
+											if err != nil {
+												utils.LogPrintln(1, "Internal Error: "+err.Error())
+											} else {
+												utils.LogPrintln(4, "Send Complete")
+											}
+										} else if len(httpRangeParts) == 1 {
+											utils.LogPrintln(4, "Send Start")
+											var theWriter io.Writer
+											if bwlim.YamlValid() {
+												theWriter = limits.GetLimitedBandwidthWriter(bwlim, rw)
+											} else {
+												theWriter = rw
+											}
+											err = zone.Backend.WriteDataRange(lookupPath, theWriter, httpRangeParts[0].Start, httpRangeParts[0].Length)
+											if err != nil {
+												utils.LogPrintln(1, "Internal Error: "+err.Error())
+											} else {
+												utils.LogPrintln(4, "Send Complete")
+											}
+										} else {
+											utils.LogPrintln(4, "Send Start")
+											var theWriter io.Writer
+											if bwlim.YamlValid() {
+												theWriter = limits.GetLimitedBandwidthWriter(bwlim, rw)
+											} else {
+												theWriter = rw
+											}
+											multWriter := multipart.NewWriter(theWriter)
+											rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
+											utils.LogPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
+											for _, currentPart := range httpRangeParts {
+												mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
+													"Content-Range": {currentPart.ToField(fsSize)},
+													"Content-Type":  {theMimeType},
+												})
+												utils.LogPrintln(3, "Content-Range: "+currentPart.ToField(fsSize))
+												utils.LogPrintln(3, "Content-Type: "+theMimeType)
+												utils.LogPrintln(4, "Part Start")
+												if err != nil {
+													utils.LogPrintln(1, "Internal Error: "+err.Error())
+													break
+												}
+												err = zone.Backend.WriteDataRange(lookupPath, mimePart, currentPart.Start, currentPart.Length)
+												if err != nil {
+													utils.LogPrintln(1, "Internal Error: "+err.Error())
+													break
+												}
+												utils.LogPrintln(4, "Part End")
+											}
+											err := multWriter.Close()
+											if err != nil {
+												utils.LogPrintln(1, "Internal Error: "+err.Error())
+											} else {
+												utils.LogPrintln(4, "Send Complete")
+											}
+										}
+									}
+								}
+							} else {
+								processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
+							}
+							if zone.Config.CacheResponse.RequestLimitedCacheCheck {
+								if zone.PathAttributes[lookupPath] == nil {
+									zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
+								} else {
+									zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
+								}
+							}
+						} else {
+							utils.SwitchToNonCachingHeaders(rw.Header())
+							writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusForbidden, "")
+						}
+					}
+				} else {
+					utils.SetNeverCacheHeader(rw.Header())
+					writeResponseHeaderCanWriteBody(1, req.Method, rw, http.StatusInternalServerError, "Stat Failure: "+err.Error())
+				}
+			}
+		}
 	}
 }
 
@@ -389,55 +391,5 @@ func (zone *Zone) ZoneHostAllowed(host string) bool {
 			}
 		}
 		return false
-	}
-}
-
-func NewZonePathAttributes(lModTime time.Time, eTag string) *ZonePathAttributes {
-	return &ZonePathAttributes{
-		lastModifiedTime: lModTime,
-		eTag:             eTag,
-		NotExpunged:      true,
-	}
-}
-
-type ZonePathAttributes struct {
-	lastModifiedTime time.Time
-	eTag             string
-	contentLength    string
-	contentType      string
-	cacheControl     string
-	age              string
-	expire           string
-	NotExpunged      bool
-}
-
-func (zpa *ZonePathAttributes) Update(lModTime time.Time, eTag string, header http.Header) {
-	zpa.NotExpunged = true
-	zpa.lastModifiedTime = lModTime
-	zpa.eTag = eTag
-	zpa.contentLength = header.Get("Content-Length")
-	zpa.contentType = header.Get("Content-Type")
-	zpa.cacheControl = header.Get("Cache-Control")
-	zpa.age = header.Get("Age")
-	zpa.expire = header.Get("Expires")
-}
-
-func (zpa *ZonePathAttributes) UpdateHeader(header http.Header) {
-	if zpa.NotExpunged {
-		if zpa.contentLength != "" {
-			header.Set("Content-Length", zpa.contentLength)
-		}
-		if zpa.contentType != "" {
-			header.Set("Content-Type", zpa.contentType)
-		}
-		if zpa.cacheControl != "" {
-			header.Set("Cache-Control", zpa.cacheControl)
-		}
-		if zpa.age != "" {
-			header.Set("Age", zpa.age)
-		}
-		if zpa.expire != "" {
-			header.Set("Expires", zpa.expire)
-		}
 	}
 }

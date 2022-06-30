@@ -7,17 +7,6 @@ import (
 	"strconv"
 )
 
-func runBackgroundHttp(s *http.Server) {
-	err := s.ListenAndServe()
-	if err != nil {
-		if err == http.ErrServerClosed {
-			logPrintln(0, "The http server shutdown successfully")
-		} else {
-			log.Fatalf("[Http] Error trying to host the http server: %s\n", err.Error())
-		}
-	}
-}
-
 func writeResponseHeaderCanWriteBody(minLevel uint, method string, rw http.ResponseWriter, statusCode int, message string) bool {
 	hasBody := method != http.MethodHead && method != http.MethodOptions
 	if hasBody && message != "" {
