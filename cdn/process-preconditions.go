@@ -25,9 +25,9 @@ func processSupportedPreconditions429(rw http.ResponseWriter, req *http.Request,
 func processSupportedPreconditions(statusCode int, statusMessage string, rw http.ResponseWriter, req *http.Request, modT time.Time, etag string, noBypassModify bool, noBypassMatch bool) bool {
 	theStrippedETag := utils.GetETagValue(etag)
 	if noBypassMatch && theStrippedETag != "" && req.Header.Get("If-None-Match") != "" {
-		etagVals := utils.GetETagValues(req.Header.Get("If-None-Match"))
+		eTagValues := utils.GetETagValues(req.Header.Get("If-None-Match"))
 		conditionSuccess := false
-		for _, s := range etagVals {
+		for _, s := range eTagValues {
 			if s == theStrippedETag {
 				conditionSuccess = true
 				break
@@ -41,9 +41,9 @@ func processSupportedPreconditions(statusCode int, statusMessage string, rw http
 	}
 
 	if noBypassMatch && theStrippedETag != "" && req.Header.Get("If-Match") != "" {
-		etagVals := utils.GetETagValues(req.Header.Get("If-Match"))
+		eTagValues := utils.GetETagValues(req.Header.Get("If-Match"))
 		conditionFailed := true
-		for _, s := range etagVals {
+		for _, s := range eTagValues {
 			if s == theStrippedETag {
 				conditionFailed = false
 				break
@@ -135,15 +135,15 @@ func processRangePreconditions(maxLength int64, rw http.ResponseWriter, req *htt
 func getMultipartLength(parts []utils.ContentRangeValue, contentType string, maxLength int64) int64 {
 	cWriter := &utils.CountingWriter{Length: 0}
 	var returnLength int64 = 0
-	multWriter := multipart.NewWriter(cWriter)
+	mWriter := multipart.NewWriter(cWriter)
 	for _, currentPart := range parts {
-		_, _ = multWriter.CreatePart(textproto.MIMEHeader{
+		_, _ = mWriter.CreatePart(textproto.MIMEHeader{
 			"Content-Range": {currentPart.ToField(maxLength)},
 			"Content-Type":  {contentType},
 		})
 		returnLength += currentPart.Length
 	}
-	_ = multWriter.Close()
+	_ = mWriter.Close()
 	returnLength += cWriter.Length
 	return returnLength
 }

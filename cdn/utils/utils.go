@@ -11,8 +11,8 @@ import (
 
 func LengthOfStringSlice(theSlice []string) int {
 	theLength := 0
-	for _, cstr := range theSlice {
-		theLength += len(cstr)
+	for _, i := range theSlice {
+		theLength += len(i)
 	}
 	theLength += (len(theSlice) - 1) * 2
 	return theLength

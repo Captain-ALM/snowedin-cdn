@@ -12,6 +12,7 @@ import (
 	"snow.mrmelon54.xyz/snowedin/conf"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func NewZone(conf conf.ZoneYaml, logLevel uint) *Zone {
@@ -22,6 +23,10 @@ func NewZone(conf conf.ZoneYaml, logLevel uint) *Zone {
 	cZone := &Zone{
 		Config:           conf,
 		Backend:          NewBackendFromName(conf.Backend, conf.BackendSettings),
+		mutAccess:        new(sync.RWMutex),
+		mutRequest:       new(sync.RWMutex),
+		mutConn:          new(sync.RWMutex),
+		mutPathAttr:      new(sync.RWMutex),
 		AccessLimits:     make(map[string]*limits.AccessLimit),
 		RequestLimits:    make(map[string]*limits.RequestLimit),
 		ConnectionLimits: make(map[string]*limits.ConnectionLimit),
@@ -37,10 +42,55 @@ func NewZone(conf conf.ZoneYaml, logLevel uint) *Zone {
 type Zone struct {
 	Config           conf.ZoneYaml
 	Backend          Backend
+	mutAccess        *sync.RWMutex
+	mutRequest       *sync.RWMutex
+	mutConn          *sync.RWMutex
+	mutPathAttr      *sync.RWMutex
 	AccessLimits     map[string]*limits.AccessLimit
 	RequestLimits    map[string]*limits.RequestLimit
 	ConnectionLimits map[string]*limits.ConnectionLimit
 	PathAttributes   map[string]*ZonePathAttributes
+}
+
+func (zone *Zone) checkRequestLimits(clientIP string) *limits.RequestLimit {
+	zone.mutRequest.Lock()
+	a := zone.RequestLimits[clientIP]
+	if a == nil {
+		reqLimit := zone.Config.Limits.GetLimitRequestsYaml(clientIP)
+		a = limits.NewRequestLimit(reqLimit)
+		zone.RequestLimits[clientIP] = a
+	}
+	zone.mutRequest.Unlock()
+	return a
+}
+
+func (zone *Zone) checkConnectionLimits(clientIP string) *limits.ConnectionLimit {
+	zone.mutConn.Lock()
+	a := zone.ConnectionLimits[clientIP]
+	if a == nil {
+		connLimit := zone.Config.Limits.GetLimitConnectionYaml(clientIP)
+		a = limits.NewConnectionLimit(connLimit)
+		zone.ConnectionLimits[clientIP] = a
+	}
+	zone.mutConn.Unlock()
+	return a
+}
+
+func (zone *Zone) checkAccessLimits(lookupPath string) *limits.AccessLimit {
+	zone.mutAccess.Lock()
+	a := zone.AccessLimits[lookupPath]
+	if a == nil {
+		a = limits.NewAccessLimit(zone.Config.AccessLimit)
+		zone.AccessLimits[lookupPath] = a
+	}
+	zone.mutAccess.RUnlock()
+	return a
+}
+
+func (zone *Zone) checkPathAttributes(lookupPath string) *ZonePathAttributes {
+	zone.mutPathAttr.RLock()
+	defer zone.mutPathAttr.RUnlock()
+	return zone.PathAttributes[lookupPath]
 }
 
 func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
@@ -50,46 +100,34 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 
 	clientIP := realip.FromRequest(req)
 
-	if zone.RequestLimits[clientIP] == nil {
-		rqlim := zone.Config.Limits.GetLimitRequestsYaml(clientIP)
-		zone.RequestLimits[clientIP] = limits.NewRequestLimit(rqlim)
-	}
+	reqLimit := zone.checkRequestLimits(clientIP)
+	connLimit := zone.checkConnectionLimits(clientIP)
 
-	if zone.ConnectionLimits[clientIP] == nil {
-		cnlim := zone.Config.Limits.GetLimitConnectionYaml(clientIP)
-		zone.ConnectionLimits[clientIP] = limits.NewConnectionLimit(cnlim)
-	}
+	bwLim := zone.Config.Limits.GetBandwidthLimitYaml(clientIP)
 
-	bwlim := zone.Config.Limits.GetBandwidthLimitYaml(clientIP)
-
-	if !zone.ConnectionLimits[clientIP].LimitConf.YamlValid() || zone.ConnectionLimits[clientIP].StartConnection() {
-
+	if !connLimit.LimitConf.YamlValid() || connLimit.StartConnection() {
 		lookupPath := strings.TrimPrefix(path.Clean(strings.TrimPrefix(req.URL.Path, "/"+zone.Config.Name+"/")), "/")
 
 		if idx := strings.IndexAny(lookupPath, "?"); idx > -1 {
 			lookupPath = lookupPath[:idx]
 		}
 
-		if !zone.RequestLimits[clientIP].LimitConf.YamlValid() || zone.RequestLimits[clientIP].StartRequest() {
+		if !reqLimit.LimitConf.YamlValid() || reqLimit.StartRequest() {
+			pExists, pListTable := zone.Backend.Exists(lookupPath)
 
-			pexists, plistable := zone.Backend.Exists(lookupPath)
-
-			if pexists {
-
-				zLAccessLimts := zone.AccessLimits[lookupPath]
-				if zLAccessLimts == nil {
-					zLAccessLimts = limits.NewAccessLimit(zone.Config.AccessLimit)
-					zone.AccessLimits[lookupPath] = zLAccessLimts
-				}
+			if pExists {
+				assLimit := zone.checkAccessLimits(lookupPath)
 
 				switch req.Method {
 				case http.MethodGet, http.MethodHead:
-					zone.handleZoneGetAndHead(rw, req, zLAccessLimts, lookupPath, plistable, bwlim)
+					zone.handleZoneGetAndHead(rw, req, assLimit, lookupPath, pListTable, bwLim)
 				case http.MethodDelete:
 					err := zone.Backend.Purge(lookupPath)
-					if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil {
-						zone.PathAttributes[lookupPath].NotExpunged = false
+					pAttr := zone.checkPathAttributes(lookupPath)
+					if zone.Config.CacheResponse.RequestLimitedCacheCheck && pAttr != nil {
+						pAttr.NotExpunged = false
 					}
+
 					utils.SetNeverCacheHeader(rw.Header())
 					if err == nil {
 						writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusOK, "")
@@ -101,26 +139,30 @@ func (zone *Zone) ZoneHandleRequest(rw http.ResponseWriter, req *http.Request) {
 				}
 
 			} else {
-				if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil {
-					zone.PathAttributes[lookupPath].NotExpunged = false
+				pAttr := zone.checkPathAttributes(lookupPath)
+				if zone.Config.CacheResponse.RequestLimitedCacheCheck && pAttr != nil {
+					pAttr.NotExpunged = false
 				}
+				zone.mutAccess.Lock()
 				if zone.AccessLimits[lookupPath] != nil {
 					zone.AccessLimits[lookupPath] = nil
 				}
+				zone.mutAccess.Unlock()
 				utils.SetNeverCacheHeader(rw.Header())
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusNotFound, "Object Not Found")
 			}
 		} else {
-			if zone.Config.CacheResponse.RequestLimitedCacheCheck && zone.PathAttributes[lookupPath] != nil && zone.PathAttributes[lookupPath].NotExpunged {
-				zone.PathAttributes[lookupPath].UpdateHeader(rw.Header())
-				processSupportedPreconditions429(rw, req, zone.PathAttributes[lookupPath].lastModifiedTime, zone.PathAttributes[lookupPath].eTag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
+			pAttr := zone.checkPathAttributes(lookupPath)
+			if zone.Config.CacheResponse.RequestLimitedCacheCheck && pAttr != nil && pAttr.NotExpunged {
+				pAttr.UpdateHeader(rw.Header())
+				processSupportedPreconditions429(rw, req, pAttr.lastModifiedTime, pAttr.eTag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
 			} else {
 				utils.SetNeverCacheHeader(rw.Header())
 				writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusTooManyRequests, "Too Many Requests")
 			}
 		}
-		if zone.ConnectionLimits[clientIP].LimitConf.YamlValid() {
-			zone.ConnectionLimits[clientIP].StopConnection()
+		if connLimit.LimitConf.YamlValid() {
+			connLimit.StopConnection()
 		}
 	} else {
 		utils.SetNeverCacheHeader(rw.Header())
@@ -253,11 +295,13 @@ func (zone *Zone) handleZoneGetAndHead(rw http.ResponseWriter, req *http.Request
 								}
 							}
 							if zone.Config.CacheResponse.RequestLimitedCacheCheck {
+								zone.mutPathAttr.Lock()
 								if zone.PathAttributes[lookupPath] == nil {
 									zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
 								} else {
 									zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
 								}
+								zone.mutPathAttr.Unlock()
 							}
 						} else {
 							utils.SetNeverCacheHeader(rw.Header())
@@ -326,11 +370,11 @@ func (zone *Zone) handleZoneGetAndHead(rw http.ResponseWriter, req *http.Request
 											} else {
 												theWriter = rw
 											}
-											multWriter := multipart.NewWriter(theWriter)
-											rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+multWriter.Boundary())
-											utils.LogPrintln(3, "Content-Type: multipart/byteranges; boundary="+multWriter.Boundary())
+											mWriter := multipart.NewWriter(theWriter)
+											rw.Header().Set("Content-Type", "multipart/byteranges; boundary="+mWriter.Boundary())
+											utils.LogPrintln(3, "Content-Type: multipart/byteranges; boundary="+mWriter.Boundary())
 											for _, currentPart := range httpRangeParts {
-												mimePart, err := multWriter.CreatePart(textproto.MIMEHeader{
+												mimePart, err := mWriter.CreatePart(textproto.MIMEHeader{
 													"Content-Range": {currentPart.ToField(fsSize)},
 													"Content-Type":  {theMimeType},
 												})
@@ -348,7 +392,7 @@ func (zone *Zone) handleZoneGetAndHead(rw http.ResponseWriter, req *http.Request
 												}
 												utils.LogPrintln(4, "Part End")
 											}
-											err := multWriter.Close()
+											err := mWriter.Close()
 											if err != nil {
 												utils.LogPrintln(1, "Internal Error: "+err.Error())
 											} else {
@@ -361,11 +405,13 @@ func (zone *Zone) handleZoneGetAndHead(rw http.ResponseWriter, req *http.Request
 								processSupportedPreconditions200(rw, req, fsMod, theETag, zone.Config.CacheResponse.NotModifiedResponseUsingLastModified, zone.Config.CacheResponse.NotModifiedResponseUsingETags)
 							}
 							if zone.Config.CacheResponse.RequestLimitedCacheCheck {
+								zone.mutPathAttr.Lock()
 								if zone.PathAttributes[lookupPath] == nil {
 									zone.PathAttributes[lookupPath] = NewZonePathAttributes(fsMod, theETag)
 								} else {
 									zone.PathAttributes[lookupPath].Update(fsMod, theETag, rw.Header())
 								}
+								zone.mutPathAttr.Unlock()
 							}
 						} else {
 							utils.SwitchToNonCachingHeaders(rw.Header())

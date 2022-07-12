@@ -9,8 +9,8 @@ type ContentRangeValue struct {
 	Start, Length int64
 }
 
-func (rstrc ContentRangeValue) ToField(maxLength int64) string {
-	return "bytes " + strconv.FormatInt(rstrc.Start, 10) + "-" + strconv.FormatInt(rstrc.Start+rstrc.Length-1, 10) + "/" + strconv.FormatInt(maxLength, 10)
+func (r ContentRangeValue) ToField(maxLength int64) string {
+	return "bytes " + strconv.FormatInt(r.Start, 10) + "-" + strconv.FormatInt(r.Start+r.Length-1, 10) + "/" + strconv.FormatInt(maxLength, 10)
 }
 
 func GetRanges(rangeStringIn string, maxLength int64) []ContentRangeValue {

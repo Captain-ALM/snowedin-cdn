@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	pth "path"
+	"snow.mrmelon54.xyz/snowedin/utils"
 	"strconv"
 	"sync"
 	"time"
@@ -124,7 +125,7 @@ func (b *BackendFilesystem) WriteDataRange(path string, rw io.Writer, index int6
 			if err != nil {
 				return err
 			}
-			defer theFile.Close()
+			defer utils.MustClose(theFile)
 			_, err = io.Copy(fobj, io.LimitReader(theFile, int64(len(fobj.cache))))
 			if err != nil {
 				return err
@@ -145,7 +146,7 @@ func (b *BackendFilesystem) WriteDataRange(path string, rw io.Writer, index int6
 			}
 		} else {
 			theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
-			defer theReader.Close()
+			defer utils.MustClose(theReader)
 			_, err = theReader.Seek(index, 0)
 			if err != nil {
 				return err
@@ -160,26 +161,26 @@ func (b *BackendFilesystem) WriteDataRange(path string, rw io.Writer, index int6
 }
 
 func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
-	fobj, err := b.getFileObject(path)
-	if fobj == nil {
+	fObj, err := b.getFileObject(path)
+	if fObj == nil {
 		return err
 	} else {
-		if fobj.size < 0 {
+		if fObj.size < 0 {
 			return errors.New("object not writeable")
 		}
-		if len(fobj.cache) > 0 && fobj.doCache() {
+		if len(fObj.cache) > 0 && fObj.doCache() {
 			theReader, err := os.Open(pth.Join(b.directoryPath, path))
 			if err != nil {
 				return err
 			}
-			defer theReader.Close()
-			_, err = io.Copy(io.MultiWriter(rw, fobj), theReader)
+			defer utils.MustClose(theReader)
+			_, err = io.Copy(io.MultiWriter(rw, fObj), theReader)
 			if err != nil {
 				return err
 			}
 		} else {
-			theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fobj)
-			defer theReader.Close()
+			theReader := NewFileObjectReader(pth.Join(b.directoryPath, path), fObj)
+			defer utils.MustClose(theReader)
 			_, err = io.Copy(rw, theReader)
 			if err != nil {
 				return err
@@ -190,11 +191,11 @@ func (b *BackendFilesystem) WriteData(path string, rw io.Writer) (err error) {
 }
 
 func (b *BackendFilesystem) Stats(path string) (size int64, modified time.Time, err error) {
-	fobj, err := b.getFileObject(path)
-	if fobj == nil {
+	fObj, err := b.getFileObject(path)
+	if fObj == nil {
 		return 0, time.Time{}, err
 	} else {
-		return fobj.size, fobj.modifyTime.UTC(), nil
+		return fObj.size, fObj.modifyTime.UTC(), nil
 	}
 }
 
@@ -281,8 +282,8 @@ func (b *BackendFilesystem) Purge(path string) (err error) {
 }
 
 func (b *BackendFilesystem) Exists(path string) (exists bool, listable bool) {
-	if fstats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
-		if fstats.IsDir() {
+	if fStats, err := os.Stat(pth.Join(b.directoryPath, path)); err == nil {
+		if fStats.IsDir() {
 			return b.directoryListing, true
 		} else {
 			if b.existsCheckFileOpen {
