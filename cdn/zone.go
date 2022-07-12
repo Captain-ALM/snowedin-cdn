@@ -83,7 +83,7 @@ func (zone *Zone) checkAccessLimits(lookupPath string) *limits.AccessLimit {
 		a = limits.NewAccessLimit(zone.Config.AccessLimit)
 		zone.AccessLimits[lookupPath] = a
 	}
-	zone.mutAccess.RUnlock()
+	zone.mutAccess.Unlock()
 	return a
 }
 
