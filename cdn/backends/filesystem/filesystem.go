@@ -202,7 +202,8 @@ func (b *BackendFilesystem) setETag(path string, tagValue string, replaceExistin
 	b.syncer.Lock()
 	if replaceExisting || b.eTags[path] == "" {
 		theHash := crypto.SHA1.New()
-		theSum := theHash.Sum([]byte(tagValue))
+		_, _ = theHash.Write([]byte(tagValue))
+		theSum := theHash.Sum(nil)
 		theHash.Reset()
 		if len(theSum) > 0 {
 			b.eTags[path] = "\"" + hex.EncodeToString(theSum) + "\""

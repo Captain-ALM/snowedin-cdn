@@ -12,7 +12,8 @@ import (
 func GetValueForETagUsingAttributes(timeIn time.Time, sizeIn int64) string {
 	theHash := crypto.SHA1.New()
 	theValue := timeIn.Format(http.TimeFormat) + ":" + strconv.FormatInt(sizeIn, 10)
-	theSum := theHash.Sum([]byte(theValue))
+	_, _ = theHash.Write([]byte(theValue))
+	theSum := theHash.Sum(nil)
 	theHash.Reset()
 	if len(theSum) > 0 {
 		return "\"" + hex.EncodeToString(theSum) + "\""
