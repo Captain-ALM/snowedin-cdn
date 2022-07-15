@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"snow.mrmelon54.xyz/snowedin/api"
 	"snow.mrmelon54.xyz/snowedin/cdn"
 	"snow.mrmelon54.xyz/snowedin/conf"
@@ -54,9 +55,18 @@ func main() {
 
 	check(os.MkdirAll(dataDir, 0777))
 
-	//Config loading:
+	//Config file processing:
+	configLocation := os.Getenv("CONFIG_FILE")
+	if configLocation == "" {
+		configLocation = path.Join(dataDir, "config.yml")
+	} else {
+		if !filepath.IsAbs(configLocation) {
+			configLocation = path.Join(dataDir, configLocation)
+		}
+	}
 
-	configFile, err := os.Open(path.Join(dataDir, "config.yml"))
+	//Config loading:
+	configFile, err := os.Open(configLocation)
 	if err != nil {
 		log.Fatalln("Failed to open config.yml")
 	}
