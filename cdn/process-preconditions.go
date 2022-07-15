@@ -51,6 +51,7 @@ func processSupportedPreconditions(statusCode int, statusMessage string, rw http
 		}
 		if conditionFailed {
 			utils.SwitchToNonCachingHeaders(rw.Header())
+			rw.Header().Del("Content-Type")
 			rw.Header().Del("Content-Length")
 			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPreconditionFailed, "")
 			utils.LogPrintln(4, "Send Condition Not Satisfied")
@@ -71,6 +72,7 @@ func processSupportedPreconditions(statusCode int, statusMessage string, rw http
 		parse, err := time.Parse(http.TimeFormat, req.Header.Get("If-Unmodified-Since"))
 		if err == nil && modT.After(parse) {
 			utils.SwitchToNonCachingHeaders(rw.Header())
+			rw.Header().Del("Content-Type")
 			rw.Header().Del("Content-Length")
 			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusPreconditionFailed, "")
 			utils.LogPrintln(4, "Send Condition Not Satisfied")
@@ -122,6 +124,7 @@ func processRangePreconditions(maxLength int64, rw http.ResponseWriter, req *htt
 			}
 		} else {
 			utils.SwitchToNonCachingHeaders(rw.Header())
+			rw.Header().Del("Content-Type")
 			rw.Header().Del("Content-Length")
 			rw.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(maxLength, 10))
 			writeResponseHeaderCanWriteBody(2, req.Method, rw, http.StatusRequestedRangeNotSatisfiable, "")
